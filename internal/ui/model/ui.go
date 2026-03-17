@@ -2250,7 +2250,14 @@ func (m *UI) View() tea.View {
 	if !m.isTransparent {
 		v.BackgroundColor = m.com.Styles.Background
 	}
-	v.MouseMode = tea.MouseModeCellMotion
+	// When the editor (textarea) is focused, disable mouse capture so that
+	// the terminal's native text selection works. This allows users to
+	// select and copy text from the input area using the mouse.
+	if m.focus == uiFocusEditor {
+		v.MouseMode = tea.MouseModeNone
+	} else {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	v.ReportFocus = m.caps.ReportFocusEvents
 	v.WindowTitle = "crush " + home.Short(m.com.Store().WorkingDir())
 
