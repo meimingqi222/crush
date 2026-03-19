@@ -839,6 +839,10 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := m.handleClipboardTextMsg(msg); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	case clipboardFallbackMsg:
+		if cmd := m.handleClipboardFallback(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	case util.InfoMsg:
 		m.status.SetInfoMsg(msg)
 		ttl := msg.TTL
@@ -1899,7 +1903,9 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 
 			case key.Matches(msg, m.keyMap.Editor.PasteImage):
 				m.lastClipboardPasteShortcut = time.Now()
-				cmds = append(cmds, m.pasteImageFromClipboard())
+				// Pass an empty PasteMsg for keyboard shortcut - fallback is not needed
+				// since there's no text content to paste anyway.
+				cmds = append(cmds, m.pasteImageFromClipboard(tea.PasteMsg{}))
 
 			case m.attachments.HasAny() && m.textarea.Value() == "" && key.Matches(msg, m.keyMap.Editor.RemoveLastAttachment):
 				if m.attachments.DeleteLast() {
@@ -3540,13 +3546,22 @@ func (m *UI) handlePasteMsg(msg tea.PasteMsg) tea.Cmd {
 		return nil
 	}
 
-	if cmd := m.pasteImageFromClipboard(); cmd != nil {
-		return cmd
-	}
+	// Try to paste image/file from clipboard first.
+	// If clipboard has no image/file content, it will fall back to text paste.
+	return m.pasteImageFromClipboard(msg)
+}
 
-	if strings.Count(msg.Content, "\n") > pasteLinesThreshold {
+// handleClipboardFallback handles the case when clipboard has no image/file content.
+// It processes the original paste event as a text paste.
+// If pasteMsg is empty (keyboard shortcut case), there's nothing to do.
+func (m *UI) handleClipboardFallback(msg clipboardFallbackMsg) tea.Cmd {
+	// If there's no text content to fall back to, just return nil.
+	if msg.pasteMsg.Content == "" {
+		return nil
+	}
+	if strings.Count(msg.pasteMsg.Content, "\n") > pasteLinesThreshold {
 		return func() tea.Msg {
-			content := []byte(msg.Content)
+			content := []byte(msg.pasteMsg.Content)
 			if int64(len(content)) > common.MaxAttachmentSize {
 				return util.ReportWarn("Paste is too big (>5mb)")
 			}
@@ -3565,7 +3580,7 @@ func (m *UI) handlePasteMsg(msg tea.PasteMsg) tea.Cmd {
 	// Attempt to parse pasted content as file paths. If possible to parse,
 	// all files exist and are valid, add as attachments.
 	// Otherwise, paste as text.
-	paths := fsext.ParsePastedFiles(msg.Content)
+	paths := fsext.ParsePastedFiles(msg.pasteMsg.Content)
 	allExistsAndValid := func() bool {
 		if len(paths) == 0 {
 			return false
@@ -3591,7 +3606,7 @@ func (m *UI) handlePasteMsg(msg tea.PasteMsg) tea.Cmd {
 	}
 	if !allExistsAndValid() {
 		var cmd tea.Cmd
-		m.textarea, cmd = m.textarea.Update(msg)
+		m.textarea, cmd = m.textarea.Update(msg.pasteMsg)
 		return cmd
 	}
 
@@ -3666,7 +3681,8 @@ func (m *UI) shouldSkipClipboardAttachment(att message.Attachment) bool {
 // pasteImageFromClipboard returns a command that reads image data from the
 // system clipboard and creates an attachment. All IO operations are performed
 // inside the returned tea.Cmd to avoid blocking the Update loop.
-func (m *UI) pasteImageFromClipboard() tea.Cmd {
+// The original PasteMsg is passed so we can fall back to text paste if needed.
+func (m *UI) pasteImageFromClipboard(originalMsg tea.PasteMsg) tea.Cmd {
 	// Return a command that performs all clipboard IO asynchronously.
 	return func() tea.Msg {
 		// First, try to read image data from clipboard.
@@ -3683,10 +3699,16 @@ func (m *UI) pasteImageFromClipboard() tea.Cmd {
 
 		// Try to read text from clipboard (might contain file paths).
 		textData, textErr := readClipboard(clipboardFormatText)
-		if textErr != nil || len(textData) == 0 {
-			return nil
+		if textErr == nil && len(textData) > 0 {
+			// Check if the text looks like file paths.
+			candidates := clipboardPathCandidates(string(textData))
+			if len(candidates) > 0 {
+				return clipboardTextMsg{text: string(textData), err: nil}
+			}
 		}
-		return clipboardTextMsg{text: string(textData), err: nil}
+
+		// No clipboard image/file content found; fall back to text paste handling.
+		return clipboardFallbackMsg{pasteMsg: originalMsg}
 	}
 }
 
@@ -3875,6 +3897,12 @@ type clipboardPathsMsg struct {
 type clipboardTextMsg struct {
 	text string
 	err  error
+}
+
+// clipboardFallbackMsg is returned when clipboard has no image/file content,
+// signaling that the original paste event should be handled as text paste.
+type clipboardFallbackMsg struct {
+	pasteMsg tea.PasteMsg
 }
 
 var pasteRE = regexp.MustCompile(`paste_(\d+)\.[^.]+`)
