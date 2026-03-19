@@ -52,22 +52,22 @@ func DetectMimeType(data []byte) string {
 		return ""
 	}
 
-	// Check for PNG
+	// Check for PNG.
 	if data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 {
 		return "image/png"
 	}
 
-	// Check for JPEG
+	// Check for JPEG.
 	if data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
 		return "image/jpeg"
 	}
 
-	// Check for GIF
+	// Check for GIF.
 	if data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46 {
 		return "image/gif"
 	}
 
-	// Check for WebP
+	// Check for WebP.
 	if data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46 &&
 		data[8] == 0x57 && data[9] == 0x45 && data[10] == 0x42 && data[11] == 0x50 {
 		return "image/webp"
@@ -87,8 +87,8 @@ func ShouldCompress(data []byte, config CompressionConfig) bool {
 // PNG format.
 func CompressImage(data []byte, mimeType string, config CompressionConfig) (*CompressResult, error) {
 	originalSize := int64(len(data))
-	
-	// If under threshold, return original
+
+	// If under threshold, return original.
 	if !ShouldCompress(data, config) {
 		return &CompressResult{
 			Data:          data,
@@ -99,19 +99,19 @@ func CompressImage(data []byte, mimeType string, config CompressionConfig) (*Com
 		}, nil
 	}
 
-	// Decode the image
+	// Decode the image.
 	var img image.Image
 	var err error
 
 	reader := bytes.NewReader(data)
-	
+
 	switch mimeType {
 	case "image/jpeg":
 		img, err = jpeg.Decode(reader)
 	case "image/png":
 		img, err = png.Decode(reader)
 	default:
-		// Try generic decoding
+		// Try generic decoding.
 		img, err = imaging.Decode(reader)
 	}
 
@@ -126,7 +126,7 @@ func CompressImage(data []byte, mimeType string, config CompressionConfig) (*Com
 		}, nil
 	}
 
-	// Resize if needed
+	// Resize if needed.
 	bounds := img.Bounds()
 	width := bounds.Dx()
 	height := bounds.Dy()
@@ -135,14 +135,14 @@ func CompressImage(data []byte, mimeType string, config CompressionConfig) (*Com
 		img = imaging.Fit(img, config.MaxDimension, config.MaxDimension, imaging.Lanczos)
 	}
 
-	// Check if image has transparency
+	// Check if image has transparency.
 	hasTransparency := hasAlpha(img)
 
 	var output bytes.Buffer
 	var outputMimeType string
 
 	if hasTransparency {
-		// Keep PNG for images with transparency
+		// Keep PNG for images with transparency.
 		outputMimeType = "image/png"
 		if err := png.Encode(&output, img); err != nil {
 			slog.Warn("Failed to encode PNG, returning original", "error", err)
@@ -155,7 +155,7 @@ func CompressImage(data []byte, mimeType string, config CompressionConfig) (*Com
 			}, nil
 		}
 	} else {
-		// Convert to JPEG for better compression
+		// Convert to JPEG for better compression.
 		outputMimeType = "image/jpeg"
 		if err := jpeg.Encode(&output, img, &jpeg.Options{Quality: config.JPEGQuality}); err != nil {
 			slog.Warn("Failed to encode JPEG, returning original", "error", err)
@@ -172,7 +172,7 @@ func CompressImage(data []byte, mimeType string, config CompressionConfig) (*Com
 	compressedData := output.Bytes()
 	compressedSize := int64(len(compressedData))
 
-	// Only use compressed data if it's actually smaller than original
+	// Only use compressed data if it's actually smaller than original.
 	if compressedSize >= originalSize {
 		slog.Debug("Compression did not reduce size, keeping original",
 			"original_size", originalSize,
@@ -224,7 +224,7 @@ func CompressFromReader(r io.Reader, mimeType string, config CompressionConfig) 
 		return nil, fmt.Errorf("failed to read image data: %w", err)
 	}
 
-	// Auto-detect MIME type if not provided
+	// Auto-detect MIME type if not provided.
 	if mimeType == "" {
 		mimeType = DetectMimeType(data)
 	}

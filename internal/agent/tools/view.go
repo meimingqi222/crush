@@ -182,18 +182,24 @@ func NewViewTool(
 					return fantasy.ToolResponse{}, fmt.Errorf("error reading image file: %w", readErr)
 				}
 
-				// Compress image if it exceeds 1MB
+				// Compress image if it exceeds 1MB.
 				config := imageutil.DefaultCompressionConfig()
 				result, compressErr := imageutil.CompressImage(imageData, mimeType, config)
 				if compressErr != nil {
-					return fantasy.ToolResponse{}, fmt.Errorf("error compressing image: %w", compressErr)
+					slog.Warn("Failed to compress image, using original", "error", compressErr, "path", filePath)
+					// Fall through with original data.
+					result = &imageutil.CompressResult{
+						Data:          imageData,
+						MimeType:      mimeType,
+						WasCompressed: false,
+					}
 				}
 
 				encoded := base64.StdEncoding.EncodeToString(result.Data)
 				return fantasy.NewImageResponse([]byte(encoded), result.MimeType), nil
 			}
 
-			// Read the file content
+			// Read the file content.
 			content, hasMore, err := readTextFile(filePath, params.Offset, params.Limit)
 			if err != nil {
 				return fantasy.ToolResponse{}, fmt.Errorf("error reading file: %w", err)

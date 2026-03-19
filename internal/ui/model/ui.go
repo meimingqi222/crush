@@ -1884,12 +1884,10 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 			case key.Matches(msg, m.keyMap.Editor.PasteImage):
 				m.lastClipboardPasteShortcut = time.Now()
 				cmds = append(cmds, func() tea.Msg {
-					clipboardMsg := m.pasteImageFromClipboard()
-					if _, skipped := clipboardMsg.(pasteSkippedMsg); skipped {
-						return nil
-					}
-					if clipboardMsg != nil {
-						return clipboardMsg
+					// pasteImageFromClipboard now returns a tea.Cmd, so we need to execute it.
+					cmd := m.pasteImageFromClipboard()
+					if cmd != nil {
+						return cmd()
 					}
 					return util.NewInfoMsg("Clipboard does not contain an image or image file")
 				})
@@ -3533,13 +3531,8 @@ func (m *UI) handlePasteMsg(msg tea.PasteMsg) tea.Cmd {
 		return nil
 	}
 
-	if clipboardMsg := m.pasteImageFromClipboard(); clipboardMsg != nil {
-		if _, skipped := clipboardMsg.(pasteSkippedMsg); !skipped {
-			return func() tea.Msg {
-				return clipboardMsg
-			}
-		}
-		return nil
+	if cmd := m.pasteImageFromClipboard(); cmd != nil {
+		return cmd
 	}
 
 	if strings.Count(msg.Content, "\n") > pasteLinesThreshold {
@@ -3623,13 +3616,13 @@ func (m *UI) handleFilePathPaste(path string) tea.Cmd {
 		mimeType := http.DetectContentType(content[:mimeBufferSize])
 		fileName := filepath.Base(path)
 
-		// Compress image if it exceeds 1MB
+		// Compress image if it exceeds 1MB.
 		if strings.HasPrefix(mimeType, "image/") {
 			config := imageutil.DefaultCompressionConfig()
 			result, compressErr := imageutil.CompressImage(content, mimeType, config)
 			if compressErr != nil {
 				slog.Warn("Failed to compress pasted image", "error", compressErr, "path", path)
-				// Fall through with original data
+				// Fall through with original data.
 			} else if result.WasCompressed {
 				content = result.Data
 				mimeType = result.MimeType
@@ -3663,65 +3656,74 @@ func (m *UI) shouldSkipClipboardAttachment(att message.Attachment) bool {
 // pasteImageFromClipboard reads image data from the system clipboard and
 // creates an attachment. If no image data is found, it falls back to
 // file-drop clipboard entries and then clipboard text paths.
-func (m *UI) pasteImageFromClipboard() tea.Msg {
-	imageData, err := readClipboard(clipboardFormatImage)
-	if err == nil && len(imageData) > 0 {
-		if int64(len(imageData)) > common.MaxAttachmentSize {
-			return util.InfoMsg{
-				Type: util.InfoTypeError,
-				Msg:  "File too large, max 5MB",
+func (m *UI) pasteImageFromClipboard() tea.Cmd {
+	return func() tea.Msg {
+		imageData, err := readClipboard(clipboardFormatImage)
+		if err == nil && len(imageData) > 0 {
+			if int64(len(imageData)) > common.MaxAttachmentSize {
+				return util.InfoMsg{
+					Type: util.InfoTypeError,
+					Msg:  "File too large, max 5MB",
+				}
+			}
+
+			// Compress image if it exceeds 1MB.
+			mimeType := mimeOf(imageData)
+			config := imageutil.DefaultCompressionConfig()
+			result, compressErr := imageutil.CompressImage(imageData, mimeType, config)
+			if compressErr != nil {
+				slog.Warn("Failed to compress clipboard image", "error", compressErr)
+				// Fall through with original data.
+			} else if result.WasCompressed {
+				imageData = result.Data
+				mimeType = result.MimeType
+			}
+
+			// Determine file extension based on MIME type.
+			ext := ".png"
+			if mimeType == "image/jpeg" {
+				ext = ".jpg"
+			}
+			name := fmt.Sprintf("paste_%d%s", m.pasteIdx(), ext)
+			attachment := message.Attachment{
+				FilePath: name,
+				FileName: name,
+				MimeType: mimeType,
+				Content:  imageData,
+			}
+			if m.shouldSkipClipboardAttachment(attachment) {
+				return pasteSkippedMsg{}
+			}
+			return attachment
+		}
+
+		if paths, pathsErr := readClipboardFileList(); pathsErr == nil {
+			if attachment, ok := m.attachmentFromClipboardPaths(paths); ok {
+				return attachment
 			}
 		}
 
-		// Compress image if it exceeds 1MB
-		mimeType := mimeOf(imageData)
-		config := imageutil.DefaultCompressionConfig()
-		result, compressErr := imageutil.CompressImage(imageData, mimeType, config)
-		if compressErr != nil {
-			slog.Warn("Failed to compress clipboard image", "error", compressErr)
-			// Fall through with original data
-		} else if result.WasCompressed {
-			imageData = result.Data
-			mimeType = result.MimeType
+		textData, textErr := readClipboard(clipboardFormatText)
+		if textErr != nil || len(textData) == 0 {
+			return nil
 		}
-
-		name := fmt.Sprintf("paste_%d.png", m.pasteIdx())
-		attachment := message.Attachment{
-			FilePath: name,
-			FileName: name,
-			MimeType: mimeType,
-			Content:  imageData,
-		}
-		if m.shouldSkipClipboardAttachment(attachment) {
-			return pasteSkippedMsg{}
-		}
-		return attachment
-	}
-
-	if paths, pathsErr := readClipboardFileList(); pathsErr == nil {
-		if attachment, ok := m.attachmentFromClipboardPaths(paths); ok {
+		if attachment, ok := m.attachmentFromClipboardPaths(clipboardPathCandidates(string(textData))); ok {
 			return attachment
 		}
-	}
-
-	textData, textErr := readClipboard(clipboardFormatText)
-	if textErr != nil || len(textData) == 0 {
 		return nil
 	}
-	if attachment, ok := m.attachmentFromClipboardPaths(clipboardPathCandidates(string(textData))); ok {
-		return attachment
-	}
-	return nil
 }
 
-func (m *UI) attachmentFromClipboardPaths(paths []string) (message.Attachment, bool) {
-	for _, path := range paths {
-		attachment, err := attachmentFromClipboardPath(path)
-		if err == nil {
-			return attachment, true
+func (m *UI) attachmentFromClipboardPaths(paths []string) tea.Cmd {
+	return func() tea.Msg {
+		for _, path := range paths {
+			attachment, err := attachmentFromClipboardPath(path)
+			if err == nil {
+				return attachment
+			}
 		}
+		return nil
 	}
-	return message.Attachment{}, false
 }
 
 func attachmentFromClipboardPath(rawPath string) (message.Attachment, error) {
@@ -3758,13 +3760,13 @@ func attachmentFromClipboardPath(rawPath string) (message.Attachment, error) {
 		return message.Attachment{}, readErr
 	}
 
-	// Compress image if it exceeds 1MB
+	// Compress image if it exceeds 1MB.
 	mimeType := mimeOf(content)
 	config := imageutil.DefaultCompressionConfig()
 	result, compressErr := imageutil.CompressImage(content, mimeType, config)
 	if compressErr != nil {
 		slog.Warn("Failed to compress clipboard image", "error", compressErr, "path", path)
-		// Fall through with original data
+		// Fall through with original data.
 	} else if result.WasCompressed {
 		content = result.Data
 		mimeType = result.MimeType
