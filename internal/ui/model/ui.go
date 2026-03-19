@@ -1883,14 +1883,11 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 
 			case key.Matches(msg, m.keyMap.Editor.PasteImage):
 				m.lastClipboardPasteShortcut = time.Now()
-				cmds = append(cmds, func() tea.Msg {
-					// pasteImageFromClipboard now returns a tea.Cmd, so we need to execute it.
-					cmd := m.pasteImageFromClipboard()
-					if cmd != nil {
-						return cmd()
-					}
-					return util.NewInfoMsg("Clipboard does not contain an image or image file")
-				})
+				if cmd := m.pasteImageFromClipboard(); cmd != nil {
+					cmds = append(cmds, cmd)
+				} else {
+					cmds = append(cmds, util.NewInfoMsg("Clipboard does not contain an image or image file"))
+				}
 
 			case m.attachments.HasAny() && m.textarea.Value() == "" && key.Matches(msg, m.keyMap.Editor.RemoveLastAttachment):
 				if m.attachments.DeleteLast() {
@@ -3656,17 +3653,21 @@ func (m *UI) shouldSkipClipboardAttachment(att message.Attachment) bool {
 // pasteImageFromClipboard reads image data from the system clipboard and
 // creates an attachment. If no image data is found, it falls back to
 // file-drop clipboard entries and then clipboard text paths.
+// Returns nil if no clipboard data is available.
 func (m *UI) pasteImageFromClipboard() tea.Cmd {
-	return func() tea.Msg {
-		imageData, err := readClipboard(clipboardFormatImage)
-		if err == nil && len(imageData) > 0 {
-			if int64(len(imageData)) > common.MaxAttachmentSize {
+	imageData, err := readClipboard(clipboardFormatImage)
+	if err == nil && len(imageData) > 0 {
+		if int64(len(imageData)) > common.MaxAttachmentSize {
+			return func() tea.Msg {
 				return util.InfoMsg{
 					Type: util.InfoTypeError,
 					Msg:  "File too large, max 5MB",
 				}
 			}
+		}
 
+		// Return a command that compresses the image.
+		return func() tea.Msg {
 			// Compress image if it exceeds 1MB.
 			mimeType := mimeOf(imageData)
 			config := imageutil.DefaultCompressionConfig()
@@ -3696,34 +3697,53 @@ func (m *UI) pasteImageFromClipboard() tea.Cmd {
 			}
 			return attachment
 		}
+	}
 
-		if paths, pathsErr := readClipboardFileList(); pathsErr == nil {
-			if attachment, ok := m.attachmentFromClipboardPaths(paths); ok {
-				return attachment
-			}
-		}
+	// Check for file list in clipboard.
+	if paths, pathsErr := readClipboardFileList(); pathsErr == nil {
+		return m.attachmentFromClipboardPaths(paths)
+	}
 
-		textData, textErr := readClipboard(clipboardFormatText)
-		if textErr != nil || len(textData) == 0 {
-			return nil
-		}
-		if attachment, ok := m.attachmentFromClipboardPaths(clipboardPathCandidates(string(textData))); ok {
-			return attachment
-		}
+	// Check for text clipboard that might contain file paths.
+	textData, textErr := readClipboard(clipboardFormatText)
+	if textErr != nil || len(textData) == 0 {
 		return nil
 	}
+	if attachment, ok := m.attachmentFromClipboardPaths(clipboardPathCandidates(string(textData))); ok {
+		return attachment
+	}
+
+	return nil
 }
 
 func (m *UI) attachmentFromClipboardPaths(paths []string) tea.Cmd {
-	return func() tea.Msg {
-		for _, path := range paths {
-			attachment, err := attachmentFromClipboardPath(path)
-			if err == nil {
-				return attachment
+	// Check if any path is valid before returning a command.
+	for _, path := range paths {
+		normalizedPath := normalizeClipboardPath(path)
+		if normalizedPath == "" {
+			continue
+		}
+		if _, statErr := os.Stat(normalizedPath); statErr != nil {
+			continue
+		}
+		lowerPath := strings.ToLower(normalizedPath)
+		for _, ext := range common.AllowedImageTypes {
+			if strings.HasSuffix(lowerPath, ext) {
+				// Found a valid path, return a command.
+				return func() tea.Msg {
+					for _, p := range paths {
+						attachment, err := attachmentFromClipboardPath(p)
+						if err == nil {
+							return attachment
+						}
+					}
+					return nil
+				}
 			}
 		}
-		return nil
 	}
+	// No valid paths found.
+	return nil
 }
 
 func attachmentFromClipboardPath(rawPath string) (message.Attachment, error) {
