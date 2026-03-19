@@ -132,7 +132,7 @@ func CompressImage(data []byte, mimeType string, config CompressionConfig) (*Com
 	height := bounds.Dy()
 
 	if width > config.MaxDimension || height > config.MaxDimension {
-		img = imaging.Resize(img, config.MaxDimension, 0, imaging.Lanczos)
+		img = imaging.Fit(img, config.MaxDimension, config.MaxDimension, imaging.Lanczos)
 	}
 
 	// Check if image has transparency
