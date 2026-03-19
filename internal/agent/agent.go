@@ -612,7 +612,8 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 		result, err = runStream(providerOptions, retryAttempt == 0)
 
 		// Check for retriable errors (429, 503, network issues).
-		if err != nil && isRetriableError(err) && retryAttempt < maxRetriableAttempts {
+		// Only retry if no steps have been completed yet to avoid duplicate tool side effects.
+		if err != nil && isRetriableError(err) && completedStepsThisRun == 0 && retryAttempt < maxRetriableAttempts {
 			// Clean up all messages created during the failed attempt so
 			// the retry starts from a clean slate.
 			if len(allRunMessageIDs) > 0 {

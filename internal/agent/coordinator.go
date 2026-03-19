@@ -606,6 +606,11 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent) ([]fan
 		}
 	}
 
+	// Add custom plugin tools - they bypass AllowedTools filter since they are user-defined
+	for _, customTool := range plugin.GetCustomTools() {
+		filteredTools = append(filteredTools, plugin.NewCustomToolAgentTool(customTool, c.cfg.WorkingDir()))
+	}
+
 	for _, tool := range tools.GetMCPTools(c.permissions, c.cfg, c.cfg.WorkingDir()) {
 		if agent.AllowedMCP == nil {
 			// No MCP restrictions
