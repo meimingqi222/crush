@@ -16,6 +16,7 @@ import (
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/filepathext"
 	"github.com/charmbracelet/crush/internal/filetracker"
+	"github.com/charmbracelet/crush/internal/imageutil"
 	"github.com/charmbracelet/crush/internal/lsp"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/skills"
@@ -181,8 +182,15 @@ func NewViewTool(
 					return fantasy.ToolResponse{}, fmt.Errorf("error reading image file: %w", readErr)
 				}
 
-				encoded := base64.StdEncoding.EncodeToString(imageData)
-				return fantasy.NewImageResponse([]byte(encoded), mimeType), nil
+				// Compress image if it exceeds 1MB
+				config := imageutil.DefaultCompressionConfig()
+				result, compressErr := imageutil.CompressImage(imageData, mimeType, config)
+				if compressErr != nil {
+					return fantasy.ToolResponse{}, fmt.Errorf("error compressing image: %w", compressErr)
+				}
+
+				encoded := base64.StdEncoding.EncodeToString(result.Data)
+				return fantasy.NewImageResponse([]byte(encoded), result.MimeType), nil
 			}
 
 			// Read the file content

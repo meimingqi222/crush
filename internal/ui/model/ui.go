@@ -37,6 +37,7 @@ import (
 	"github.com/charmbracelet/crush/internal/fsext"
 	"github.com/charmbracelet/crush/internal/history"
 	"github.com/charmbracelet/crush/internal/home"
+	"github.com/charmbracelet/crush/internal/imageutil"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/planmode"
@@ -3621,6 +3622,20 @@ func (m *UI) handleFilePathPaste(path string) tea.Cmd {
 		mimeBufferSize := min(512, len(content))
 		mimeType := http.DetectContentType(content[:mimeBufferSize])
 		fileName := filepath.Base(path)
+
+		// Compress image if it exceeds 1MB
+		if strings.HasPrefix(mimeType, "image/") {
+			config := imageutil.DefaultCompressionConfig()
+			result, compressErr := imageutil.CompressImage(content, mimeType, config)
+			if compressErr != nil {
+				slog.Warn("failed to compress pasted image", "error", compressErr, "path", path)
+				// Fall through with original data
+			} else if result.WasCompressed {
+				content = result.Data
+				mimeType = result.MimeType
+			}
+		}
+
 		return message.Attachment{
 			FilePath: path,
 			FileName: fileName,
@@ -3657,11 +3672,24 @@ func (m *UI) pasteImageFromClipboard() tea.Msg {
 				Msg:  "File too large, max 5MB",
 			}
 		}
+
+		// Compress image if it exceeds 1MB
+		mimeType := mimeOf(imageData)
+		config := imageutil.DefaultCompressionConfig()
+		result, compressErr := imageutil.CompressImage(imageData, mimeType, config)
+		if compressErr != nil {
+			slog.Warn("failed to compress clipboard image", "error", compressErr)
+			// Fall through with original data
+		} else if result.WasCompressed {
+			imageData = result.Data
+			mimeType = result.MimeType
+		}
+
 		name := fmt.Sprintf("paste_%d.png", m.pasteIdx())
 		attachment := message.Attachment{
 			FilePath: name,
 			FileName: name,
-			MimeType: mimeOf(imageData),
+			MimeType: mimeType,
 			Content:  imageData,
 		}
 		if m.shouldSkipClipboardAttachment(attachment) {
@@ -3730,10 +3758,22 @@ func attachmentFromClipboardPath(rawPath string) (message.Attachment, error) {
 		return message.Attachment{}, readErr
 	}
 
+	// Compress image if it exceeds 1MB
+	mimeType := mimeOf(content)
+	config := imageutil.DefaultCompressionConfig()
+	result, compressErr := imageutil.CompressImage(content, mimeType, config)
+	if compressErr != nil {
+		slog.Warn("failed to compress clipboard image", "error", compressErr, "path", path)
+		// Fall through with original data
+	} else if result.WasCompressed {
+		content = result.Data
+		mimeType = result.MimeType
+	}
+
 	return message.Attachment{
 		FilePath: path,
 		FileName: filepath.Base(path),
-		MimeType: mimeOf(content),
+		MimeType: mimeType,
 		Content:  content,
 	}, nil
 }
