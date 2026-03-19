@@ -3763,7 +3763,7 @@ func attachmentFromClipboardPath(rawPath string) (message.Attachment, error) {
 	config := imageutil.DefaultCompressionConfig()
 	result, compressErr := imageutil.CompressImage(content, mimeType, config)
 	if compressErr != nil {
-		slog.Warn("failed to compress clipboard image", "error", compressErr, "path", path)
+		slog.Warn("Failed to compress clipboard image", "error", compressErr, "path", path)
 		// Fall through with original data
 	} else if result.WasCompressed {
 		content = result.Data

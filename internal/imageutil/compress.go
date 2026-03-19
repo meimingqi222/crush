@@ -116,7 +116,7 @@ func CompressImage(data []byte, mimeType string, config CompressionConfig) (*Com
 	}
 
 	if err != nil {
-		slog.Warn("failed to decode image for compression, returning original", "error", err, "mime_type", mimeType)
+		slog.Warn("Failed to decode image for compression, returning original", "error", err, "mime_type", mimeType)
 		return &CompressResult{
 			Data:          data,
 			MimeType:      mimeType,
@@ -145,7 +145,7 @@ func CompressImage(data []byte, mimeType string, config CompressionConfig) (*Com
 		// Keep PNG for images with transparency
 		outputMimeType = "image/png"
 		if err := png.Encode(&output, img); err != nil {
-			slog.Warn("failed to encode PNG, returning original", "error", err)
+			slog.Warn("Failed to encode PNG, returning original", "error", err)
 			return &CompressResult{
 				Data:          data,
 				MimeType:      mimeType,
@@ -158,7 +158,7 @@ func CompressImage(data []byte, mimeType string, config CompressionConfig) (*Com
 		// Convert to JPEG for better compression
 		outputMimeType = "image/jpeg"
 		if err := jpeg.Encode(&output, img, &jpeg.Options{Quality: config.JPEGQuality}); err != nil {
-			slog.Warn("failed to encode JPEG, returning original", "error", err)
+			slog.Warn("Failed to encode JPEG, returning original", "error", err)
 			return &CompressResult{
 				Data:          data,
 				MimeType:      mimeType,
@@ -174,7 +174,7 @@ func CompressImage(data []byte, mimeType string, config CompressionConfig) (*Com
 
 	// Only use compressed data if it's actually smaller than original
 	if compressedSize >= originalSize {
-		slog.Debug("compression did not reduce size, keeping original",
+		slog.Debug("Compression did not reduce size, keeping original",
 			"original_size", originalSize,
 			"compressed_size", compressedSize,
 		)
@@ -187,7 +187,7 @@ func CompressImage(data []byte, mimeType string, config CompressionConfig) (*Com
 		}, nil
 	}
 
-	slog.Debug("image compressed",
+	slog.Debug("Image compressed",
 		"original_size", originalSize,
 		"compressed_size", compressedSize,
 		"ratio", float64(compressedSize)/float64(originalSize),
