@@ -42,6 +42,7 @@ import (
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/oauth/copilot"
 	"github.com/charmbracelet/crush/internal/permission"
+	"github.com/charmbracelet/crush/internal/plugin"
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/charmbracelet/crush/internal/stringext"
@@ -75,6 +76,7 @@ const autoResumePromptPrefix = "The previous session was interrupted because it 
 type SessionAgentCall struct {
 	SessionID        string
 	Prompt           string
+	Purpose          plugin.ChatTransformPurpose
 	InitiatorType    string
 	ProviderOptions  fantasy.ProviderOptions
 	Attachments      []message.Attachment
@@ -92,6 +94,7 @@ type SessionAgent interface {
 	SetModels(large Model, small Model)
 	SetTools(tools []fantasy.AgentTool)
 	SetSystemPrompt(systemPrompt string)
+	SetSystemPromptPrefix(systemPromptPrefix string)
 	Cancel(sessionID string)
 	CancelAll()
 	IsSessionBusy(sessionID string) bool
@@ -121,6 +124,7 @@ type sessionAgent struct {
 	tools              *csync.Slice[fantasy.AgentTool]
 	agentFactory       func(model fantasy.LanguageModel, opts ...fantasy.AgentOption) fantasy.Agent
 
+	refreshCallConfig    func(context.Context) (sessionAgentRuntimeConfig, error)
 	isSubAgent           bool
 	sessions             session.Service
 	messages             message.Service
@@ -139,6 +143,7 @@ type SessionAgentOptions struct {
 	SystemPromptPrefix   string
 	SystemPrompt         string
 	AgentFactory         func(model fantasy.LanguageModel, opts ...fantasy.AgentOption) fantasy.Agent
+	RefreshCallConfig    func(context.Context) (sessionAgentRuntimeConfig, error)
 	IsSubAgent           bool
 	DisableAutoSummarize bool
 	IsYolo               bool
@@ -147,6 +152,18 @@ type SessionAgentOptions struct {
 	Tools                []fantasy.AgentTool
 	Notify               pubsub.Publisher[notify.Notification]
 }
+
+type sessionAgentRuntimeConfig struct {
+	ProviderOptions  fantasy.ProviderOptions
+	MaxOutputTokens  int64
+	Temperature      *float64
+	TopP             *float64
+	TopK             *int64
+	FrequencyPenalty *float64
+	PresencePenalty  *float64
+}
+
+type sessionAgentRuntimeConfigContextKey struct{}
 
 func NewSessionAgent(
 	opts SessionAgentOptions,
@@ -161,6 +178,7 @@ func NewSessionAgent(
 		systemPromptPrefix:   csync.NewValue(opts.SystemPromptPrefix),
 		systemPrompt:         csync.NewValue(opts.SystemPrompt),
 		agentFactory:         agentFactory,
+		refreshCallConfig:    opts.RefreshCallConfig,
 		isSubAgent:           opts.IsSubAgent,
 		sessions:             opts.Sessions,
 		messages:             opts.Messages,
@@ -207,6 +225,10 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 		return nil, nil
 	}
 
+	if err := a.refreshCallConfigIfNeeded(ctx, &call); err != nil {
+		return nil, err
+	}
+
 	// Copy mutable fields under lock to avoid races with SetTools/SetModels.
 	agentTools := a.tools.Copy()
 	largeModel := a.largeModel.Get()
@@ -228,17 +250,11 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 		systemPrompt += "\n\n<mcp-instructions>\n" + s + "\n</mcp-instructions>"
 	}
 
-	if len(agentTools) > 0 {
-		// Add Anthropic caching to the last tool.
-		agentTools[len(agentTools)-1].SetProviderOptions(a.getCacheControlOptions())
+	providerCtx := defaultProviderContext()
+	requestPurpose := call.Purpose
+	if requestPurpose == "" {
+		requestPurpose = plugin.ChatTransformPurposeRequest
 	}
-
-	agent := a.agentFactory(
-		retryableStreamModel{largeModel.Model},
-		fantasy.WithSystemPrompt(systemPrompt),
-		fantasy.WithTools(agentTools...),
-		fantasy.WithUserAgent(userAgent),
-	)
 
 	sessionLock := sync.Mutex{}
 	currentSession, err := a.sessions.Get(ctx, call.SessionID)
@@ -249,6 +265,41 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 	msgs, err := a.getSessionMessages(ctx, currentSession)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session messages: %w", err)
+	}
+	preflightState, err := a.buildChatRequestState(ctx, chatRequestStateInput{
+		SessionID:    call.SessionID,
+		Agent:        "session",
+		Model:        largeModel,
+		Provider:     providerCtx,
+		Purpose:      plugin.ChatTransformPurposePreflightEstimate,
+		Messages:     msgs,
+		Message:      transientUserMessage(call.SessionID, call.Prompt, call.Attachments),
+		Attachments:  call.Attachments,
+		SystemPrompt: systemPrompt,
+		PromptPrefix: promptPrefix,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !a.disableAutoSummarize && len(msgs) > 0 && shouldAutoSummarize(
+		a.estimateSessionPromptTokens(preflightState.History, call.Prompt, call.Attachments, agentTools, preflightState.SystemPrompt, preflightState.PromptPrefix),
+		int64(largeModel.CatwalkCfg.ContextWindow),
+		call.MaxOutputTokens,
+	) {
+		if truncErr := a.truncateOversizedToolResults(ctx, call.SessionID); truncErr != nil {
+			slog.Warn("Failed to truncate oversized tool results before preflight summarization", "error", truncErr, "session_id", call.SessionID)
+		}
+		if summarizeErr := a.Summarize(withSessionCompactingPurpose(copilot.ContextWithInitiatorType(ctx, copilot.InitiatorAgent), plugin.ChatTransformPurposeSummarize), call.SessionID, call.ProviderOptions); summarizeErr != nil {
+			return nil, summarizeErr
+		}
+		currentSession, err = a.sessions.Get(ctx, call.SessionID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to reload session after summarization: %w", err)
+		}
+		msgs, err = a.getSessionMessages(ctx, currentSession)
+		if err != nil {
+			return nil, fmt.Errorf("failed to reload session messages after summarization: %w", err)
+		}
 	}
 
 	var wg sync.WaitGroup
@@ -262,7 +313,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 	defer wg.Wait()
 
 	// Add the user message to the session.
-	_, err = a.createUserMessage(ctx, call)
+	userMessage, err := a.createUserMessage(ctx, call)
 	if err != nil {
 		return nil, err
 	}
@@ -276,7 +327,27 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 	defer cancel()
 	defer a.activeRequests.Del(call.SessionID)
 
-	history, files := a.preparePrompt(msgs, call.Attachments...)
+	requestState, err := a.buildChatRequestState(genCtx, chatRequestStateInput{
+		SessionID:    call.SessionID,
+		Agent:        "session",
+		Model:        largeModel,
+		Provider:     providerCtx,
+		Purpose:      requestPurpose,
+		Messages:     msgs,
+		Message:      userMessage,
+		Attachments:  call.Attachments,
+		SystemPrompt: systemPrompt,
+		PromptPrefix: promptPrefix,
+	})
+	if err != nil {
+		return nil, err
+	}
+	agent := a.agentFactory(
+		retryableStreamModel{largeModel.Model},
+		fantasy.WithSystemPrompt(requestState.SystemPrompt),
+		fantasy.WithTools(agentTools...),
+		fantasy.WithUserAgent(userAgent),
+	)
 
 	startTime := time.Now()
 	a.eventPromptSent(call.SessionID)
@@ -295,10 +366,23 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 		completedStepsThisRun = 0
 		firstRequestStep = billFirstStepAsUser
 
-		return agent.Stream(genCtx, fantasy.AgentStreamCall{
+		if err := plugin.TriggerChatBeforeRequest(genCtx, plugin.ChatBeforeRequestInput{
+			SessionID: call.SessionID,
+			Agent:     "session",
+			Model: plugin.ModelInfo{
+				ProviderID: largeModel.ModelCfg.Provider,
+				ModelID:    largeModel.ModelCfg.Model,
+			},
+			Provider: providerCtx,
+			Message:  userMessage,
+		}); err != nil {
+			return nil, err
+		}
+
+		result, err := agent.Stream(genCtx, fantasy.AgentStreamCall{
 			Prompt:           message.PromptWithTextAttachments(call.Prompt, call.Attachments),
-			Files:            files,
-			Messages:         history,
+			Files:            requestState.Files,
+			Messages:         requestState.History,
 			ProviderOptions:  providerOptions,
 			MaxOutputTokens:  &call.MaxOutputTokens,
 			TopP:             call.TopP,
@@ -342,8 +426,8 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 					}
 				}
 
-				if promptPrefix != "" {
-					prepared.Messages = append([]fantasy.Message{fantasy.NewSystemMessage(promptPrefix)}, prepared.Messages...)
+				if requestState.PromptPrefix != "" {
+					prepared.Messages = append([]fantasy.Message{fantasy.NewSystemMessage(requestState.PromptPrefix)}, prepared.Messages...)
 				}
 
 				var assistantMsg message.Message
@@ -478,7 +562,12 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 			},
 			StopWhen: []fantasy.StopCondition{
 				func(_ []fantasy.StepResult) bool {
-					if shouldAutoSummarize(currentSession.LastContextTokens(), int64(largeModel.CatwalkCfg.ContextWindow), call.MaxOutputTokens) && !a.disableAutoSummarize {
+					projectedPromptTokens, estimateErr := a.estimateNextStepPromptTokens(genCtx, call.SessionID, agentTools, systemPrompt, promptPrefix, largeModel, providerCtx)
+					if estimateErr != nil {
+						slog.Warn("Failed to estimate next-step prompt tokens", "error", estimateErr, "session_id", call.SessionID)
+						projectedPromptTokens = currentSession.LastContextTokens()
+					}
+					if shouldAutoSummarize(projectedPromptTokens, int64(largeModel.CatwalkCfg.ContextWindow), call.MaxOutputTokens) && !a.disableAutoSummarize {
 						shouldSummarize = true
 						return true
 					}
@@ -489,6 +578,23 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 				},
 			},
 		})
+		if hookErr := plugin.TriggerChatAfterResponse(genCtx, plugin.ChatAfterResponseInput{
+			SessionID: call.SessionID,
+			Agent:     "session",
+			Model: plugin.ModelInfo{
+				ProviderID: largeModel.ModelCfg.Provider,
+				ModelID:    largeModel.ModelCfg.Model,
+			},
+			Purpose: requestPurpose,
+			Result:  result,
+			Error:   err,
+		}); hookErr != nil {
+			if err != nil {
+				return nil, fmt.Errorf("stream error: %w; hook error: %w", err, hookErr)
+			}
+			return nil, hookErr
+		}
+		return result, err
 	}
 
 	providerOptions := call.ProviderOptions
@@ -688,7 +794,11 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 
 	if shouldSummarize {
 		a.activeRequests.Del(call.SessionID)
-		if summarizeErr := a.Summarize(copilot.ContextWithInitiatorType(genCtx, copilot.InitiatorAgent), call.SessionID, call.ProviderOptions); summarizeErr != nil {
+		summarizePurpose := plugin.ChatTransformPurposeSummarize
+		if contextWindowExceeded {
+			summarizePurpose = plugin.ChatTransformPurposeRecover
+		}
+		if summarizeErr := a.Summarize(withSessionCompactingPurpose(copilot.ContextWithInitiatorType(genCtx, copilot.InitiatorAgent), summarizePurpose), call.SessionID, call.ProviderOptions); summarizeErr != nil {
 			return nil, summarizeErr
 		}
 		// Queue an auto-resume when:
@@ -706,6 +816,9 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 				resumePrefix = contextWindowResumePromptPrefix
 			}
 			call.Prompt = fmt.Sprintf(resumePrefix+"%s`", call.Prompt)
+			if contextWindowExceeded {
+				call.Purpose = plugin.ChatTransformPurposeRecover
+			}
 			call.InitiatorType = copilot.InitiatorAgent
 			existing = append(existing, call)
 			a.messageQueue.Set(call.SessionID, existing)
@@ -727,6 +840,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 	// There are queued messages restart the loop.
 	firstQueuedMessage := queuedMessages[0]
 	a.messageQueue.Set(call.SessionID, queuedMessages[1:])
+	ctx = context.WithValue(ctx, sessionAgentRuntimeConfigContextKey{}, (*sessionAgentRuntimeConfig)(nil))
 	return a.Run(ctx, firstQueuedMessage)
 }
 
@@ -734,10 +848,21 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	if a.IsSessionBusy(sessionID) {
 		return ErrSessionBusy
 	}
+	if a.refreshCallConfig != nil {
+		runtimeConfig, err := a.refreshCallConfig(ctx)
+		if err != nil {
+			return err
+		}
+		if runtimeConfig.ProviderOptions != nil {
+			opts = runtimeConfig.ProviderOptions
+		}
+	}
 
 	// Copy mutable fields under lock to avoid races with SetModels.
 	largeModel := a.largeModel.Get()
 	systemPromptPrefix := a.systemPromptPrefix.Get()
+	providerCtx := defaultProviderContext()
+	compactingPurpose := sessionCompactingPurposeFromContext(ctx)
 
 	currentSession, err := a.sessions.Get(ctx, sessionID)
 	if err != nil {
@@ -747,12 +872,40 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	if err != nil {
 		return err
 	}
+	if truncErr := a.truncateOversizedToolResults(ctx, sessionID); truncErr != nil {
+		slog.Warn("Failed to truncate oversized tool results before summarization", "error", truncErr, "session_id", sessionID)
+	}
+	msgs, err = a.getSessionMessages(ctx, currentSession)
+	if err != nil {
+		return err
+	}
 	if len(msgs) == 0 {
 		// Nothing to summarize.
 		return nil
 	}
 
-	aiMsgs, _ := a.preparePrompt(msgs)
+	transformedMsgs, err := a.transformSessionMessages(ctx, chatRequestStateInput{
+		SessionID: sessionID,
+		Agent:     "session",
+		Model:     largeModel,
+		Provider:  providerCtx,
+		Purpose:   compactingPurpose,
+		Messages:  msgs,
+		Message:   message.Message{SessionID: sessionID, Role: message.User},
+	})
+	if err != nil {
+		return err
+	}
+	aiMsgs, _ := a.preparePrompt(transformedMsgs)
+	compacting, err := plugin.TriggerSessionCompacting(ctx, plugin.SessionCompactingInput{
+		SessionID: sessionID,
+		Agent:     "session",
+		Model:     agentModelInfo(largeModel),
+		Purpose:   compactingPurpose,
+	}, plugin.SessionCompactingOutput{})
+	if err != nil {
+		return err
+	}
 
 	genCtx, cancel := context.WithCancel(ctx)
 	genCtx = copilot.ContextWithInitiatorType(genCtx, copilot.InitiatorAgent)
@@ -760,7 +913,7 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	defer a.activeRequests.Del(sessionID)
 	defer cancel()
 
-	agent := fantasy.NewAgent(largeModel.Model,
+	agent := a.agentFactory(largeModel.Model,
 		fantasy.WithSystemPrompt(string(summaryPrompt)),
 		fantasy.WithUserAgent(userAgent),
 	)
@@ -774,7 +927,7 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		return err
 	}
 
-	summaryPromptText := buildSummaryPrompt(currentSession.Todos)
+	summaryPromptText := buildSessionCompactingPrompt(currentSession.Todos, compacting.Context, compacting.Prompt)
 
 	resp, err := agent.Stream(genCtx, fantasy.AgentStreamCall{
 		Prompt:          summaryPromptText,
@@ -1142,6 +1295,91 @@ func shouldAutoSummarize(contextUsed, contextWindow, maxOutputTokens int64) bool
 	return contextUsed >= usable
 }
 
+func estimateStringTokens(s string) int64 {
+	if s == "" {
+		return 0
+	}
+	return int64((len(s) + 3) / 4)
+}
+
+func (a *sessionAgent) estimateSessionPromptTokens(history []fantasy.Message, prompt string, attachments []message.Attachment, tools []fantasy.AgentTool, systemPrompt string, promptPrefix string) int64 {
+	total := estimatePromptTokens(history, tools)
+	total += estimateStringTokens(systemPrompt)
+	total += estimateStringTokens(promptPrefix)
+	total += estimateStringTokens(message.PromptWithTextAttachments(prompt, attachments))
+	return total
+}
+
+func (a *sessionAgent) estimateNextStepPromptTokens(ctx context.Context, sessionID string, tools []fantasy.AgentTool, systemPrompt string, promptPrefix string, model Model, provider plugin.ProviderContext) (int64, error) {
+	currentSession, err := a.sessions.Get(ctx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	msgs, err := a.getSessionMessages(ctx, currentSession)
+	if err != nil {
+		return 0, err
+	}
+	state, err := a.buildChatRequestState(ctx, chatRequestStateInput{
+		SessionID:    sessionID,
+		Agent:        "session",
+		Model:        model,
+		Provider:     provider,
+		Purpose:      plugin.ChatTransformPurposeNextStepEstimate,
+		Messages:     msgs,
+		Message:      message.Message{SessionID: sessionID, Role: message.User},
+		SystemPrompt: systemPrompt,
+		PromptPrefix: promptPrefix,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return a.estimateSessionPromptTokens(state.History, "", nil, tools, state.SystemPrompt, state.PromptPrefix), nil
+}
+
+func applyRuntimeConfig(call *SessionAgentCall, runtimeConfig sessionAgentRuntimeConfig) {
+	if runtimeConfig.ProviderOptions != nil {
+		call.ProviderOptions = runtimeConfig.ProviderOptions
+	}
+	if runtimeConfig.MaxOutputTokens > 0 {
+		call.MaxOutputTokens = runtimeConfig.MaxOutputTokens
+	}
+	if runtimeConfig.Temperature != nil {
+		call.Temperature = runtimeConfig.Temperature
+	}
+	if runtimeConfig.TopP != nil {
+		call.TopP = runtimeConfig.TopP
+	}
+	if runtimeConfig.TopK != nil {
+		call.TopK = runtimeConfig.TopK
+	}
+	if runtimeConfig.FrequencyPenalty != nil {
+		call.FrequencyPenalty = runtimeConfig.FrequencyPenalty
+	}
+	if runtimeConfig.PresencePenalty != nil {
+		call.PresencePenalty = runtimeConfig.PresencePenalty
+	}
+}
+
+func (a *sessionAgent) refreshCallConfigIfNeeded(ctx context.Context, call *SessionAgentCall) error {
+	if runtimeConfig, ok := ctx.Value(sessionAgentRuntimeConfigContextKey{}).(*sessionAgentRuntimeConfig); ok && runtimeConfig != nil {
+		applyRuntimeConfig(call, *runtimeConfig)
+		return nil
+	}
+	if runtimeConfig, ok := ctx.Value(sessionAgentRuntimeConfigContextKey{}).(sessionAgentRuntimeConfig); ok {
+		applyRuntimeConfig(call, runtimeConfig)
+		return nil
+	}
+	if a.refreshCallConfig == nil {
+		return nil
+	}
+	runtimeConfig, err := a.refreshCallConfig(ctx)
+	if err != nil {
+		return err
+	}
+	applyRuntimeConfig(call, runtimeConfig)
+	return nil
+}
+
 func (a *sessionAgent) resetRetriedStep(ctx context.Context, assistant *message.Message, toolMessageIDs []string) error {
 	for _, toolMessageID := range toolMessageIDs {
 		if err := a.messages.Delete(ctx, toolMessageID); err != nil {
@@ -1380,6 +1618,10 @@ func (a *sessionAgent) SetTools(tools []fantasy.AgentTool) {
 
 func (a *sessionAgent) SetSystemPrompt(systemPrompt string) {
 	a.systemPrompt.Set(systemPrompt)
+}
+
+func (a *sessionAgent) SetSystemPromptPrefix(systemPromptPrefix string) {
+	a.systemPromptPrefix.Set(systemPromptPrefix)
 }
 
 func (a *sessionAgent) Model() Model {
