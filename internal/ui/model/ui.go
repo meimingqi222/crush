@@ -3560,12 +3560,13 @@ func (m *UI) handleClipboardFallback(msg clipboardFallbackMsg) tea.Cmd {
 		return nil
 	}
 	if strings.Count(msg.pasteMsg.Content, "\n") > pasteLinesThreshold {
+		pasteIdx := m.pasteIdx()
 		return func() tea.Msg {
 			content := []byte(msg.pasteMsg.Content)
 			if int64(len(content)) > common.MaxAttachmentSize {
 				return util.ReportWarn("Paste is too big (>5mb)")
 			}
-			name := fmt.Sprintf("paste_%d.txt", m.pasteIdx())
+			name := fmt.Sprintf("paste_%d.txt", pasteIdx)
 			mimeBufferSize := min(512, len(content))
 			mimeType := http.DetectContentType(content[:mimeBufferSize])
 			return message.Attachment{
