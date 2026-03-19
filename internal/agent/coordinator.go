@@ -604,7 +604,7 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent) ([]fan
 	}
 
 	// Add custom plugin tools - they bypass AllowedTools filter since they are user-defined
-	// But only add them if they don't already exist in filteredTools (to avoid duplicates)
+	// But only add them if they don't already exist in filteredTools (to avoid duplicates).
 	existingToolNames := make(map[string]bool)
 	for _, tool := range filteredTools {
 		existingToolNames[tool.Info().Name] = true
