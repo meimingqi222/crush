@@ -133,14 +133,14 @@ func (m *Tool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolRe
 			// Decode base64 to raw bytes
 			decoded, decodeErr := base64.StdEncoding.DecodeString(string(result.Data))
 			if decodeErr != nil {
-				slog.Warn("failed to decode base64 MCP image", "error", decodeErr, "tool", m.tool.Name)
+				slog.Warn("Failed to decode base64 MCP image", "error", decodeErr, "tool", m.tool.Name)
 				// Fall through with original data
 			} else {
 				// Compress the decoded image
 				compressConfig := imageutil.DefaultCompressionConfig()
 				compressResult, compressErr := imageutil.CompressImage(decoded, mimeType, compressConfig)
 				if compressErr != nil {
-					slog.Warn("failed to compress MCP image", "error", compressErr, "tool", m.tool.Name)
+					slog.Warn("Failed to compress MCP image", "error", compressErr, "tool", m.tool.Name)
 					// Fall through with original data
 				} else if compressResult.WasCompressed {
 					// Re-encode to base64
