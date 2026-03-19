@@ -416,9 +416,22 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 				}
 				firstRequestStep = false
 
+				// Use latest tools (updated by SetTools when MCP tools change).
+				prepared.Tools = a.tools.Copy()
+
 				prepared.Messages = options.Messages
 				for i := range prepared.Messages {
 					prepared.Messages[i].ProviderOptions = nil
+				}
+
+				queuedCalls, _ := a.messageQueue.Get(call.SessionID)
+				a.messageQueue.Del(call.SessionID)
+				for _, queued := range queuedCalls {
+					userMessage, createErr := a.createUserMessage(callContext, queued)
+					if createErr != nil {
+						return callContext, prepared, createErr
+					}
+					prepared.Messages = append(prepared.Messages, userMessage.ToAIMessage()...)
 				}
 
 				prepared.Messages = a.workaroundProviderMediaLimitations(prepared.Messages, largeModel)
