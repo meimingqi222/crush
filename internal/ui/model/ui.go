@@ -819,10 +819,26 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 	case message.Attachment:
+		// Check for duplicate clipboard paste before adding.
+		if m.shouldSkipClipboardAttachment(msg) {
+			return m, tea.Batch(cmds...)
+		}
 		if m.attachments.Update(msg) {
 			m.updateLayoutAndSize()
 		}
 		return m, tea.Batch(cmds...)
+	case clipboardImageMsg:
+		if cmd := m.handleClipboardImageMsg(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	case clipboardPathsMsg:
+		if cmd := m.handleClipboardPathsMsg(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	case clipboardTextMsg:
+		if cmd := m.handleClipboardTextMsg(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	case util.InfoMsg:
 		m.status.SetInfoMsg(msg)
 		ttl := msg.TTL
@@ -1883,11 +1899,7 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 
 			case key.Matches(msg, m.keyMap.Editor.PasteImage):
 				m.lastClipboardPasteShortcut = time.Now()
-				if cmd := m.pasteImageFromClipboard(); cmd != nil {
-					cmds = append(cmds, cmd)
-				} else {
-					cmds = append(cmds, util.NewInfoMsg("Clipboard does not contain an image or image file"))
-				}
+				cmds = append(cmds, m.pasteImageFromClipboard())
 
 			case m.attachments.HasAny() && m.textarea.Value() == "" && key.Matches(msg, m.keyMap.Editor.RemoveLastAttachment):
 				if m.attachments.DeleteLast() {
@@ -3645,105 +3657,112 @@ func (m *UI) shouldSkipClipboardAttachment(att message.Attachment) bool {
 	if sig == m.lastClipboardAttachmentSig && time.Since(m.lastClipboardAttachmentAt) <= 200*time.Millisecond {
 		return true
 	}
+	// Update state - this is safe because we're in the Update loop, not in a goroutine.
 	m.lastClipboardAttachmentSig = sig
 	m.lastClipboardAttachmentAt = time.Now()
 	return false
 }
 
-// pasteImageFromClipboard reads image data from the system clipboard and
-// creates an attachment. If no image data is found, it falls back to
-// file-drop clipboard entries and then clipboard text paths.
-// Returns nil if no clipboard data is available.
+// pasteImageFromClipboard returns a command that reads image data from the
+// system clipboard and creates an attachment. All IO operations are performed
+// inside the returned tea.Cmd to avoid blocking the Update loop.
 func (m *UI) pasteImageFromClipboard() tea.Cmd {
-	imageData, err := readClipboard(clipboardFormatImage)
-	if err == nil && len(imageData) > 0 {
-		if int64(len(imageData)) > common.MaxAttachmentSize {
-			return func() tea.Msg {
-				return util.InfoMsg{
-					Type: util.InfoTypeError,
-					Msg:  "File too large, max 5MB",
-				}
-			}
+	// Return a command that performs all clipboard IO asynchronously.
+	return func() tea.Msg {
+		// First, try to read image data from clipboard.
+		imageData, err := readClipboard(clipboardFormatImage)
+		if err == nil && len(imageData) > 0 {
+			return clipboardImageMsg{imageData: imageData, err: nil}
 		}
 
-		// Return a command that compresses the image.
-		return func() tea.Msg {
-			// Compress image if it exceeds 1MB.
-			mimeType := mimeOf(imageData)
-			config := imageutil.DefaultCompressionConfig()
-			result, compressErr := imageutil.CompressImage(imageData, mimeType, config)
-			if compressErr != nil {
-				slog.Warn("Failed to compress clipboard image", "error", compressErr)
-				// Fall through with original data.
-			} else if result.WasCompressed {
-				imageData = result.Data
-				mimeType = result.MimeType
-			}
-
-			// Determine file extension based on MIME type.
-			ext := ".png"
-			if mimeType == "image/jpeg" {
-				ext = ".jpg"
-			}
-			name := fmt.Sprintf("paste_%d%s", m.pasteIdx(), ext)
-			attachment := message.Attachment{
-				FilePath: name,
-				FileName: name,
-				MimeType: mimeType,
-				Content:  imageData,
-			}
-			if m.shouldSkipClipboardAttachment(attachment) {
-				return pasteSkippedMsg{}
-			}
-			return attachment
+		// Try to read file list from clipboard.
+		paths, pathsErr := readClipboardFileList()
+		if pathsErr == nil && len(paths) > 0 {
+			return clipboardPathsMsg{paths: paths}
 		}
-	}
 
-	// Check for file list in clipboard.
-	if paths, pathsErr := readClipboardFileList(); pathsErr == nil {
-		return m.attachmentFromClipboardPaths(paths)
+		// Try to read text from clipboard (might contain file paths).
+		textData, textErr := readClipboard(clipboardFormatText)
+		if textErr != nil || len(textData) == 0 {
+			return nil
+		}
+		return clipboardTextMsg{text: string(textData), err: nil}
 	}
+}
 
-	// Check for text clipboard that might contain file paths.
-	textData, textErr := readClipboard(clipboardFormatText)
-	if textErr != nil || len(textData) == 0 {
+// handleClipboardImageMsg processes clipboard image data returned by the command.
+func (m *UI) handleClipboardImageMsg(msg clipboardImageMsg) tea.Cmd {
+	if msg.err != nil || len(msg.imageData) == 0 {
 		return nil
 	}
-	if attachment, ok := m.attachmentFromClipboardPaths(clipboardPathCandidates(string(textData))); ok {
-		return attachment
+
+	if int64(len(msg.imageData)) > common.MaxAttachmentSize {
+		return func() tea.Msg {
+			return util.InfoMsg{
+				Type: util.InfoTypeError,
+				Msg:  "File too large, max 5MB",
+			}
+		}
 	}
 
-	return nil
+	// Return a command that compresses the image.
+	pasteIdx := m.pasteIdx()
+	return func() tea.Msg {
+		// Compress image if it exceeds 1MB.
+		imageData := msg.imageData
+		mimeType := mimeOf(imageData)
+		config := imageutil.DefaultCompressionConfig()
+		result, compressErr := imageutil.CompressImage(imageData, mimeType, config)
+		if compressErr != nil {
+			slog.Warn("Failed to compress clipboard image", "error", compressErr)
+			// Fall through with original data.
+		} else if result.WasCompressed {
+			imageData = result.Data
+			mimeType = result.MimeType
+		}
+
+		// Determine file extension based on MIME type.
+		ext := ".png"
+		if mimeType == "image/jpeg" {
+			ext = ".jpg"
+		}
+		name := fmt.Sprintf("paste_%d%s", pasteIdx, ext)
+		return message.Attachment{
+			FilePath: name,
+			FileName: name,
+			MimeType: mimeType,
+			Content:  imageData,
+		}
+	}
+}
+
+// handleClipboardPathsMsg processes clipboard file paths returned by the command.
+func (m *UI) handleClipboardPathsMsg(msg clipboardPathsMsg) tea.Cmd {
+	if len(msg.paths) == 0 {
+		return nil
+	}
+	return m.attachmentFromClipboardPaths(msg.paths)
+}
+
+// handleClipboardTextMsg processes clipboard text returned by the command.
+func (m *UI) handleClipboardTextMsg(msg clipboardTextMsg) tea.Cmd {
+	if msg.err != nil || msg.text == "" {
+		return nil
+	}
+	return m.attachmentFromClipboardPaths(clipboardPathCandidates(msg.text))
 }
 
 func (m *UI) attachmentFromClipboardPaths(paths []string) tea.Cmd {
-	// Check if any path is valid before returning a command.
-	for _, path := range paths {
-		normalizedPath := normalizeClipboardPath(path)
-		if normalizedPath == "" {
-			continue
-		}
-		if _, statErr := os.Stat(normalizedPath); statErr != nil {
-			continue
-		}
-		lowerPath := strings.ToLower(normalizedPath)
-		for _, ext := range common.AllowedImageTypes {
-			if strings.HasSuffix(lowerPath, ext) {
-				// Found a valid path, return a command.
-				return func() tea.Msg {
-					for _, p := range paths {
-						attachment, err := attachmentFromClipboardPath(p)
-						if err == nil {
-							return attachment
-						}
-					}
-					return nil
-				}
+	// Return a command that performs all IO asynchronously.
+	return func() tea.Msg {
+		for _, path := range paths {
+			attachment, err := attachmentFromClipboardPath(path)
+			if err == nil {
+				return attachment
 			}
 		}
+		return nil
 	}
-	// No valid paths found.
-	return nil
 }
 
 func attachmentFromClipboardPath(rawPath string) (message.Attachment, error) {
@@ -3840,6 +3859,23 @@ func normalizeClipboardPath(path string) string {
 // pasteSkippedMsg is returned by pasteImageFromClipboard when the same image
 // was pasted too recently and was silently skipped to prevent duplicates.
 type pasteSkippedMsg struct{}
+
+// clipboardImageMsg is returned by the clipboard read command.
+type clipboardImageMsg struct {
+	imageData []byte
+	err       error
+}
+
+// clipboardPathsMsg is returned by the clipboard file list read command.
+type clipboardPathsMsg struct {
+	paths []string
+}
+
+// clipboardTextMsg is returned by the clipboard text read command.
+type clipboardTextMsg struct {
+	text string
+	err  error
+}
 
 var pasteRE = regexp.MustCompile(`paste_(\d+)\.[^.]+`)
 
