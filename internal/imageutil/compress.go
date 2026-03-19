@@ -48,7 +48,7 @@ type CompressResult struct {
 
 // DetectMimeType detects the MIME type from image data.
 func DetectMimeType(data []byte) string {
-	if len(data) < 8 {
+	if len(data) < 12 {
 		return ""
 	}
 

@@ -3628,7 +3628,7 @@ func (m *UI) handleFilePathPaste(path string) tea.Cmd {
 			config := imageutil.DefaultCompressionConfig()
 			result, compressErr := imageutil.CompressImage(content, mimeType, config)
 			if compressErr != nil {
-				slog.Warn("failed to compress pasted image", "error", compressErr, "path", path)
+				slog.Warn("Failed to compress pasted image", "error", compressErr, "path", path)
 				// Fall through with original data
 			} else if result.WasCompressed {
 				content = result.Data
@@ -3678,7 +3678,7 @@ func (m *UI) pasteImageFromClipboard() tea.Msg {
 		config := imageutil.DefaultCompressionConfig()
 		result, compressErr := imageutil.CompressImage(imageData, mimeType, config)
 		if compressErr != nil {
-			slog.Warn("failed to compress clipboard image", "error", compressErr)
+			slog.Warn("Failed to compress clipboard image", "error", compressErr)
 			// Fall through with original data
 		} else if result.WasCompressed {
 			imageData = result.Data
