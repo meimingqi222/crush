@@ -342,6 +342,10 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 	if err != nil {
 		return nil, err
 	}
+	if len(agentTools) > 0 {
+		// Add Anthropic caching to the last tool.
+		agentTools[len(agentTools)-1].SetProviderOptions(a.getCacheControlOptions())
+	}
 	agent := a.agentFactory(
 		retryableStreamModel{largeModel.Model},
 		fantasy.WithSystemPrompt(requestState.SystemPrompt),
