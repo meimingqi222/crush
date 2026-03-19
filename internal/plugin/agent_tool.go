@@ -8,6 +8,22 @@ import (
 	"charm.land/fantasy"
 )
 
+// sessionIDContextKey is the context key for session ID.
+// This mirrors the key in internal/agent/tools to avoid import cycles.
+type sessionIDContextKey string
+
+const sessionIDKey sessionIDContextKey = "session_id"
+
+// getSessionID extracts the session ID from the context.
+func getSessionID(ctx context.Context) string {
+	if v := ctx.Value(sessionIDKey); v != nil {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
 type toolWrapper struct {
 	inner fantasy.AgentTool
 }
@@ -36,10 +52,12 @@ func (w *toolWrapper) SetProviderOptions(opts fantasy.ProviderOptions) {
 
 func (w *toolWrapper) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	args := decodeToolArgs(params.Input)
+	sessionID := getSessionID(ctx)
 	beforeOut, err := TriggerToolBeforeExecute(ctx, ToolBeforeExecuteInput{
-		Tool:   w.Info().Name,
-		CallID: params.ID,
-		Args:   args,
+		Tool:      w.Info().Name,
+		CallID:    params.ID,
+		Args:      args,
+		SessionID: sessionID,
 	})
 	if err != nil {
 		return fantasy.ToolResponse{}, err
@@ -65,11 +83,12 @@ func (w *toolWrapper) Run(ctx context.Context, params fantasy.ToolCall) (fantasy
 
 	metadata := decodeMetadata(response.Metadata)
 	afterOut, err := TriggerToolAfterExecute(ctx, ToolAfterExecuteInput{
-		Tool:     w.Info().Name,
-		CallID:   params.ID,
-		Args:     args,
-		Result:   response.Content,
-		Metadata: metadata,
+		Tool:      w.Info().Name,
+		CallID:    params.ID,
+		Args:      args,
+		Result:    response.Content,
+		Metadata:  metadata,
+		SessionID: sessionID,
 	})
 	if err != nil {
 		return fantasy.ToolResponse{}, err

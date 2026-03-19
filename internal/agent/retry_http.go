@@ -62,11 +62,16 @@ func isRetriableError(err error) bool {
 	// indicate transient failures. This catches errors that are not
 	// wrapped as *fantasy.ProviderError (e.g. *fantasy.Error or raw
 	// HTTP client errors).
+	// Use more specific patterns to avoid false positives.
 	errStr := strings.ToLower(err.Error())
-	if strings.Contains(errStr, "503") || strings.Contains(errStr, "service unavailable") ||
-		strings.Contains(errStr, "502") || strings.Contains(errStr, "bad gateway") ||
-		strings.Contains(errStr, "504") || strings.Contains(errStr, "gateway timeout") ||
-		strings.Contains(errStr, "429") || strings.Contains(errStr, "too many requests") ||
+	if strings.Contains(errStr, "status 503") || strings.Contains(errStr, "http 503") ||
+		strings.Contains(errStr, "service unavailable") ||
+		strings.Contains(errStr, "status 502") || strings.Contains(errStr, "http 502") ||
+		strings.Contains(errStr, "bad gateway") ||
+		strings.Contains(errStr, "status 504") || strings.Contains(errStr, "http 504") ||
+		strings.Contains(errStr, "gateway timeout") ||
+		strings.Contains(errStr, "status 429") || strings.Contains(errStr, "http 429") ||
+		strings.Contains(errStr, "too many requests") ||
 		strings.Contains(errStr, "rate limit") || strings.Contains(errStr, "overloaded") {
 		return true
 	}

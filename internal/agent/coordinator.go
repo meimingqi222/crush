@@ -582,9 +582,6 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent) ([]fan
 		tools.NewViewTool(c.lspManager, c.permissions, c.filetracker, c.cfg.WorkingDir(), c.cfg.Config().Options.SkillsPaths...),
 		tools.NewWriteTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
 	)
-	for _, customTool := range plugin.GetCustomTools() {
-		allTools = append(allTools, plugin.NewCustomToolAgentTool(customTool, c.cfg.WorkingDir()))
-	}
 
 	// Add LSP tools if user has configured LSPs or auto_lsp is enabled (nil or true).
 	if len(c.cfg.Config().LSP) > 0 || c.cfg.Config().Options.AutoLSP == nil || *c.cfg.Config().Options.AutoLSP {
@@ -604,6 +601,11 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent) ([]fan
 		if slices.Contains(agent.AllowedTools, tool.Info().Name) {
 			filteredTools = append(filteredTools, tool)
 		}
+	}
+
+	// Add custom plugin tools - they bypass AllowedTools filter since they are user-defined
+	for _, customTool := range plugin.GetCustomTools() {
+		filteredTools = append(filteredTools, plugin.NewCustomToolAgentTool(customTool, c.cfg.WorkingDir()))
 	}
 
 	for _, tool := range tools.GetMCPTools(c.permissions, c.cfg, c.cfg.WorkingDir()) {
