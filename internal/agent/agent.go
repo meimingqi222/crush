@@ -356,11 +356,13 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 	var contextWindowExceeded bool
 	var currentAssistant *message.Message
 	var currentStepToolMessageIDs []string
+	var allRunMessageIDs []string
 	var estimatedPromptTokens int64
 	var completedStepsThisRun int
 	runStream := func(providerOptions fantasy.ProviderOptions, billFirstStepAsUser bool) (*fantasy.AgentResult, error) {
 		currentAssistant = nil
 		currentStepToolMessageIDs = nil
+		allRunMessageIDs = nil
 		estimatedPromptTokens = 0
 		shouldSummarize = false
 		completedStepsThisRun = 0
@@ -445,6 +447,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 				callContext = context.WithValue(callContext, tools.ModelNameContextKey, largeModel.CatwalkCfg.Name)
 				currentAssistant = &assistantMsg
 				currentStepToolMessageIDs = nil
+				allRunMessageIDs = append(allRunMessageIDs, assistantMsg.ID)
 
 				estimatedPromptTokens = estimatePromptTokens(prepared.Messages, agentTools)
 				return callContext, prepared, err
@@ -530,6 +533,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 				})
 				if createMsgErr == nil {
 					currentStepToolMessageIDs = append(currentStepToolMessageIDs, toolMsg.ID)
+					allRunMessageIDs = append(allRunMessageIDs, toolMsg.ID)
 				}
 				return createMsgErr
 			},
@@ -604,21 +608,57 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 		result, err = runStream(providerOptions, retryAttempt == 0)
 
 		// Check for retriable errors (429, 503, network issues).
-		if err != nil && isRetriableError(err) && retryAttempt < maxRetriableAttempts && completedStepsThisRun == 0 {
+		if err != nil && isRetriableError(err) && retryAttempt < maxRetriableAttempts {
+			// Clean up all messages created during the failed attempt so
+			// the retry starts from a clean slate.
+			if len(allRunMessageIDs) > 0 {
+				for _, id := range allRunMessageIDs {
+					if delErr := a.messages.Delete(ctx, id); delErr != nil {
+						slog.Warn("Failed to delete message during retry cleanup",
+							"error", delErr, "message_id", id)
+					}
+				}
+			}
 			retryAttempt++
 			delay := retryDelay(retryAttempt)
 			slog.Warn("Retrying after transient error",
 				"error", err,
 				"attempt", retryAttempt,
 				"delay", delay,
+				"completed_steps", completedStepsThisRun,
 				"session_id", call.SessionID,
 				"model", largeModel.ModelCfg.Model,
 				"provider", largeModel.ModelCfg.Provider,
 			)
+
+			// Show a temporary message in the chat so the user knows
+			// a retry is in progress and how long it will take.
+			retryText := fmt.Sprintf(
+				"Service temporarily unavailable. Retrying in %d seconds... (attempt %d/%d)",
+				int(delay.Seconds()), retryAttempt, maxRetriableAttempts,
+			)
+			retryMsg, retryMsgErr := a.messages.Create(ctx, call.SessionID, message.CreateMessageParams{
+				Role: message.Assistant,
+				Parts: []message.ContentPart{
+					message.TextContent{Text: retryText},
+				},
+				Model:    largeModel.ModelCfg.Model,
+				Provider: largeModel.ModelCfg.Provider,
+			})
+
 			select {
 			case <-ctx.Done():
+				// Clean up the retry message before returning.
+				if retryMsgErr == nil {
+					_ = a.messages.Delete(ctx, retryMsg.ID)
+				}
 				return nil, ctx.Err()
 			case <-time.After(delay):
+			}
+
+			// Remove the temporary retry message before the next attempt.
+			if retryMsgErr == nil {
+				_ = a.messages.Delete(ctx, retryMsg.ID)
 			}
 			continue
 		}
@@ -684,8 +724,13 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 		// Ensure we finish thinking on error to close the reasoning state.
 		currentAssistant.FinishThinking()
 		toolCalls := currentAssistant.ToolCalls()
-		// INFO: we use the parent context here because the genCtx has been cancelled.
-		msgs, createErr := a.messages.List(ctx, currentAssistant.SessionID)
+		// Use a detached context for cleanup DB operations. Both ctx and
+		// genCtx may be cancelled (e.g. ACP session/cancel cancels the
+		// parent runCtx which propagates to both). We must still persist
+		// tool-result messages so the conversation history stays valid.
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		msgs, createErr := a.messages.List(cleanupCtx, currentAssistant.SessionID)
 		if createErr != nil {
 			return nil, createErr
 		}
@@ -694,7 +739,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 				tc.Finished = true
 				tc.Input = "{}"
 				currentAssistant.AddToolCall(tc)
-				updateErr := a.messages.Update(ctx, *currentAssistant)
+				updateErr := a.messages.Update(cleanupCtx, *currentAssistant)
 				if updateErr != nil {
 					return nil, updateErr
 				}
@@ -729,7 +774,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 				Content:    content,
 				IsError:    true,
 			}
-			_, createErr = a.messages.Create(ctx, currentAssistant.SessionID, message.CreateMessageParams{
+			_, createErr = a.messages.Create(cleanupCtx, currentAssistant.SessionID, message.CreateMessageParams{
 				Role: message.Tool,
 				Parts: []message.ContentPart{
 					toolResult,
@@ -768,9 +813,9 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 		} else {
 			currentAssistant.AddFinish(message.FinishReasonError, defaultTitle, err.Error())
 		}
-		// Note: we use the parent context here because the genCtx has been
-		// cancelled.
-		updateErr := a.messages.Update(ctx, *currentAssistant)
+		// Use the detached cleanup context to ensure the assistant message
+		// (with its finish reason) is always persisted.
+		updateErr := a.messages.Update(cleanupCtx, *currentAssistant)
 		if updateErr != nil {
 			return nil, updateErr
 		}
@@ -1041,6 +1086,17 @@ If not, please feel free to ignore. Again do not mention this message to the use
 			),
 		))
 	}
+	// Build a set of tool-call IDs that already have a tool-result so we can
+	// detect orphaned tool_use blocks below.
+	toolResultIDs := make(map[string]bool)
+	for _, m := range msgs {
+		if m.Role == message.Tool {
+			for _, tr := range m.ToolResults() {
+				toolResultIDs[tr.ToolCallID] = true
+			}
+		}
+	}
+
 	for _, m := range msgs {
 		if len(m.Parts) == 0 {
 			continue
@@ -1051,6 +1107,32 @@ If not, please feel free to ignore. Again do not mention this message to the use
 			continue
 		}
 		history = append(history, m.ToAIMessage()...)
+
+		// Defensive: if this assistant message contains tool_use blocks
+		// without corresponding tool_result messages anywhere in the
+		// session, inject synthetic error results so the provider never
+		// rejects the request with a "missing tool_result" error.
+		if m.Role == message.Assistant {
+			var missingParts []fantasy.MessagePart
+			for _, tc := range m.ToolCalls() {
+				if !toolResultIDs[tc.ID] {
+					slog.Warn("Injecting synthetic tool_result for orphaned tool_use",
+						"tool_call_id", tc.ID, "tool_name", tc.Name)
+					missingParts = append(missingParts, fantasy.ToolResultPart{
+						ToolCallID: tc.ID,
+						Output: fantasy.ToolResultOutputContentError{
+							Error: fmt.Errorf("tool execution was interrupted"),
+						},
+					})
+				}
+			}
+			if len(missingParts) > 0 {
+				history = append(history, fantasy.Message{
+					Role:    fantasy.MessageRoleTool,
+					Content: missingParts,
+				})
+			}
+		}
 	}
 
 	var files []fantasy.FilePart
