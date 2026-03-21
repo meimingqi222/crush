@@ -923,17 +923,17 @@ func isContextLengthError(err error) bool {
 	}
 	errStr := err.Error()
 	// Check for common context length error patterns from various providers.
+	// These patterns are specifically chosen to avoid matching rate limits or other errors.
 	contextLengthIndicators := []string{
 		"context window",
 		"context length",
 		"maximum context length",
 		"range of input length",
-		"invalidparameter",
-		"invalid_parameter_error",
-		"too long",
-		"exceeds",
-		"token limit",
-		"max tokens",
+		"context_too_long",
+		"context window exceeded",
+		"input length exceeds",
+		"prompt is too long",
+		"token limit exceeded",
 	}
 	lowerErr := strings.ToLower(errStr)
 	for _, indicator := range contextLengthIndicators {
@@ -986,6 +986,9 @@ func truncateMessagesToFit(msgs []fantasy.Message, maxTokens int64) []fantasy.Me
 		}
 	}
 
+	// Store original token count before removal
+	originalTokens := totalTokens
+
 	// Remove from the oldest non-system message first
 	for totalTokens > maxTokens && startIdx < len(msgs)-minMessagesToKeep {
 		totalTokens -= msgInfos[startIdx].tokens
@@ -996,7 +999,7 @@ func truncateMessagesToFit(msgs []fantasy.Message, maxTokens int64) []fantasy.Me
 		"original_count", len(msgs),
 		"new_count", len(msgs)-startIdx,
 		"removed_count", startIdx,
-		"original_tokens", totalTokens+msgInfos[0].tokens,
+		"original_tokens", originalTokens,
 		"new_tokens", totalTokens)
 
 	return msgs[startIdx:]
