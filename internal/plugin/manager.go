@@ -41,7 +41,9 @@ func Init(ctx context.Context, input PluginInput) error {
 	if err != nil {
 		return err
 	}
-	// Register configured plugins
+	// Register configured plugins so they appear in ListPlugins() and are
+	// properly closed by Close()/Reset(). This is safe because Reset() clears
+	// the plugins slice before tests that call Init() multiple times.
 	for _, p := range configuredPlugins {
 		Register(p)
 	}
@@ -397,14 +399,19 @@ func GetCustomTools() map[string]ToolDefinition {
 	return result
 }
 
-// ListPlugins returns the names of all registered plugins.
+// ListPlugins returns the names of all registered and configured plugins.
 func ListPlugins() []string {
 	mu.RLock()
 	defer mu.RUnlock()
 
-	names := make([]string, len(plugins))
-	for i, p := range plugins {
-		names[i] = p.Name()
+	seen := make(map[string]struct{})
+	for _, p := range plugins {
+		seen[p.Name()] = struct{}{}
+	}
+
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
 	}
 	return names
 }

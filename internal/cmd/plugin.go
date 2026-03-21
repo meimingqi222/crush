@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -132,9 +133,9 @@ func installFromLocalDir(source, pluginsDir string) error {
 		return fmt.Errorf("invalid plugin metadata: %w", err)
 	}
 
-	// Copy plugin to plugins directory
+	// Copy plugin to plugins directory (excluding node_modules)
 	pluginDir := filepath.Join(pluginsDir, metadata.Name)
-	if err := copyDir(source, pluginDir); err != nil {
+	if err := copyPluginDir(source, pluginDir); err != nil {
 		return fmt.Errorf("failed to copy plugin: %w", err)
 	}
 
@@ -188,13 +189,14 @@ func installMorphCompact(pluginsDir string) error {
 		return fmt.Errorf("failed to create package.json: %w", err)
 	}
 
-	// Create plugin.json
+	// Create plugin.json with persistent mode for long-running process
 	pluginJSON := `{
   "name": "morph-compact",
   "version": "1.0.0",
   "description": "Morph compact plugin for Crush",
   "command": "node",
   "args": ["index.mjs"],
+  "mode": "persistent",
   "hooks": ["chat_messages_transform", "session_compacting"],
   "timeout_ms": 60000,
   "env": {
@@ -209,8 +211,12 @@ func installMorphCompact(pluginsDir string) error {
 		return fmt.Errorf("failed to create plugin.json: %w", err)
 	}
 
-	// Copy index.mjs from examples
-	sourcePath := filepath.Join(".", "examples", "plugins", "morph-compact", "index.mjs")
+	// Find the index.mjs file - try multiple locations
+	sourcePath := findMorphCompactSource()
+	if sourcePath == "" {
+		return fmt.Errorf("could not find morph-compact plugin source (index.mjs)")
+	}
+
 	destPath := filepath.Join(pluginDir, "index.mjs")
 
 	// Read source file
@@ -232,6 +238,37 @@ func installMorphCompact(pluginsDir string) error {
 	fmt.Println("Morph compact plugin installed successfully")
 	fmt.Println("Don't forget to set MORPH_API_KEY environment variable")
 	return nil
+}
+
+// findMorphCompactSource locates the morph-compact index.mjs file.
+// It checks multiple possible locations to handle different installation scenarios.
+func findMorphCompactSource() string {
+	// Try executable directory first (for installed binaries)
+	if exePath, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(exePath), "..", "examples", "plugins", "morph-compact", "index.mjs")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	// Try current working directory (for development)
+	if cwd, err := os.Getwd(); err == nil {
+		candidate := filepath.Join(cwd, "examples", "plugins", "morph-compact", "index.mjs")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	// Try relative to the source file location (for tests)
+	_, filename, _, _ := runtime.Caller(0)
+	if filename != "" {
+		candidate := filepath.Join(filepath.Dir(filename), "..", "..", "..", "examples", "plugins", "morph-compact", "index.mjs")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	return ""
 }
 
 func listPlugins(workingDir string) error {
@@ -277,7 +314,16 @@ func listPlugins(workingDir string) error {
 }
 
 func uninstallPlugin(name, workingDir string) error {
-	pluginDir := filepath.Join(workingDir, ".crush", "plugins", name)
+	pluginsDir := filepath.Join(workingDir, ".crush", "plugins")
+	pluginDir := filepath.Join(pluginsDir, name)
+
+	// Ensure the resolved path is within the plugins directory to prevent path traversal.
+	cleanPluginDir := filepath.Clean(pluginDir) + string(filepath.Separator)
+	cleanPluginsDir := filepath.Clean(pluginsDir) + string(filepath.Separator)
+	if !strings.HasPrefix(cleanPluginDir, cleanPluginsDir) {
+		return fmt.Errorf("invalid plugin name: %s", name)
+	}
+
 	if _, err := os.Stat(pluginDir); os.IsNotExist(err) {
 		return fmt.Errorf("plugin not found: %s", name)
 	}
@@ -325,6 +371,46 @@ func installNPMDependencies(dir string) error {
 	}
 
 	return fmt.Errorf("no package manager found. Please install pnpm (recommended) or npm")
+}
+
+// copyPluginDir copies a plugin directory, excluding node_modules to save space
+// and avoid copying large dependency trees.
+func copyPluginDir(src, dst string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		// Skip node_modules directory
+		if entry.IsDir() && entry.Name() == "node_modules" {
+			continue
+		}
+
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+
+		if entry.IsDir() {
+			if err := copyPluginDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func copyDir(src, dst string) error {
