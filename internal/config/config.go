@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"charm.land/catwalk/pkg/catwalk"
 	"github.com/charmbracelet/crush/internal/csync"
@@ -730,7 +731,9 @@ func normalizeConfiguredAgent(
 	agent.ID = agentID
 
 	if agent.Name == "" {
-		agent.Name = strings.ToUpper(agentID[:1]) + agentID[1:]
+		runes := []rune(agentID)
+		runes[0] = unicode.ToUpper(runes[0])
+		agent.Name = string(runes)
 	}
 	if agent.Model == "" {
 		agent.Model = SelectedModelTypeLarge

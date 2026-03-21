@@ -26,7 +26,10 @@ func TestAgentToolMessageItemRendersSubagentTypeAndDescription(t *testing.T) {
 		Name:     agent.AgentToolName,
 		Input:    string(params),
 		Finished: true,
-	}, nil, false)
+	}, &message.ToolResult{
+		ToolCallID: "tool-1",
+		Content:    "done",
+	}, false)
 
 	rendered := item.Render(80)
 	require.Contains(t, rendered, "General")

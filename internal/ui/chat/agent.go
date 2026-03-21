@@ -3,6 +3,7 @@ package chat
 import (
 	"encoding/json"
 	"strings"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -101,7 +102,7 @@ type AgentToolRenderContext struct {
 // RenderTool implements the [ToolRenderer] interface.
 func (r *AgentToolRenderContext) RenderTool(sty *styles.Styles, width int, opts *ToolRenderOpts) string {
 	cappedWidth := cappedMessageWidth(width)
-	if !opts.ToolCall.Finished && !opts.IsCanceled() && len(r.agent.nestedTools) == 0 {
+	if opts.IsPending() && len(r.agent.nestedTools) == 0 {
 		return pendingTool(sty, "Agent", opts.Anim)
 	}
 
@@ -161,7 +162,7 @@ func (r *AgentToolRenderContext) RenderTool(sty *styles.Styles, width int, opts 
 	parts = append(parts, childTools.Enumerator(roundedEnumerator(2, taskTagWidth-5)).String())
 
 	// Show animation if still running.
-	if !opts.HasResult() && !opts.IsCanceled() {
+	if opts.IsSpinning && !opts.HasResult() && !opts.IsCanceled() {
 		parts = append(parts, "", opts.Anim.Render())
 	}
 
@@ -180,7 +181,9 @@ func titleCase(value string) string {
 	if value == "" {
 		return ""
 	}
-	return strings.ToUpper(value[:1]) + value[1:]
+	runes := []rune(value)
+	runes[0] = unicode.ToUpper(runes[0])
+	return string(runes)
 }
 
 // -----------------------------------------------------------------------------
@@ -250,7 +253,7 @@ type agenticFetchParams struct {
 // RenderTool implements the [ToolRenderer] interface.
 func (r *AgenticFetchToolRenderContext) RenderTool(sty *styles.Styles, width int, opts *ToolRenderOpts) string {
 	cappedWidth := cappedMessageWidth(width)
-	if !opts.ToolCall.Finished && !opts.IsCanceled() && len(r.fetch.nestedTools) == 0 {
+	if opts.IsPending() && len(r.fetch.nestedTools) == 0 {
 		return pendingTool(sty, "Agentic Fetch", opts.Anim)
 	}
 
@@ -305,7 +308,7 @@ func (r *AgenticFetchToolRenderContext) RenderTool(sty *styles.Styles, width int
 	parts = append(parts, childTools.Enumerator(roundedEnumerator(2, promptTagWidth-5)).String())
 
 	// Show animation if still running.
-	if !opts.HasResult() && !opts.IsCanceled() {
+	if opts.IsSpinning && !opts.HasResult() && !opts.IsCanceled() {
 		parts = append(parts, "", opts.Anim.Render())
 	}
 

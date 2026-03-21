@@ -60,6 +60,14 @@ func TestSessionRoleLabelUsesSubagentType(t *testing.T) {
 	t.Parallel()
 
 	ui, parent, generalChild, _, _, fetchChild := testSessionUI(t)
+	info := make(map[string]childSessionInfo)
+	generalInfo, ok := fetchChildSessionMetadata(ui.com.App, generalChild.ID)
+	require.True(t, ok)
+	info[generalChild.ID] = generalInfo
+	fetchInfo, ok := fetchChildSessionMetadata(ui.com.App, fetchChild.ID)
+	require.True(t, ok)
+	info[fetchChild.ID] = fetchInfo
+	ui.childSessionInfoCache = info
 
 	require.Equal(t, "Main", ui.sessionRoleLabel(parent))
 	require.Equal(t, "General", ui.sessionRoleLabel(generalChild))
@@ -89,10 +97,9 @@ func TestOpenSelectedChildSessionUsesCurrentSelection(t *testing.T) {
 	cmd := ui.openSelectedChildSession()
 	require.NotNil(t, cmd)
 
-	msg, ok := cmd().(loadSessionMsg)
+	msg, ok := cmd().(openChildSessionMsg)
 	require.True(t, ok)
-	require.NotNil(t, msg.session)
-	require.Equal(t, firstChild.ID, msg.session.ID)
+	require.Equal(t, firstChild.ID, msg.sessionID)
 }
 
 func TestOpenParentSessionSelectsOriginatingTool(t *testing.T) {
@@ -117,10 +124,14 @@ func TestCycleSiblingChildSessionStopsAtBounds(t *testing.T) {
 	ui, _, generalChild, _, _, fetchChild := testSessionUI(t)
 
 	ui.session = generalChild
-	require.Nil(t, ui.cycleSiblingChildSession(-1))
+	cmd := ui.cycleSiblingChildSession(-1)
+	require.NotNil(t, cmd)
+	require.Nil(t, cmd())
 
 	ui.session = fetchChild
-	require.Nil(t, ui.cycleSiblingChildSession(1))
+	cmd = ui.cycleSiblingChildSession(1)
+	require.NotNil(t, cmd)
+	require.Nil(t, cmd())
 }
 
 func testSessionUI(t *testing.T) (*UI, *session.Session, *session.Session, *session.Session, *session.Session, *session.Session) {
