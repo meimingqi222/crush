@@ -41,6 +41,10 @@ func Init(ctx context.Context, input PluginInput) error {
 	if err != nil {
 		return err
 	}
+	// Register configured plugins
+	for _, p := range configuredPlugins {
+		Register(p)
+	}
 	registeredPlugins = append(registeredPlugins, configuredPlugins...)
 	toolSources := make(map[string]string)
 
@@ -410,7 +414,28 @@ func ListPlugins() []string {
 func Reset() {
 	mu.Lock()
 	defer mu.Unlock()
+
+	// Close all plugins before clearing to release resources (e.g. persistent processes).
+	for _, p := range plugins {
+		if err := p.Close(context.Background()); err != nil {
+			slog.Debug("Failed to close plugin during reset", "name", p.Name(), "error", err)
+		}
+	}
+
 	plugins = nil
 	initializedHooks = nil
 	customTools = make(map[string]ToolDefinition)
+}
+
+// Close shuts down all registered plugins that hold resources (e.g. persistent processes).
+func Close(ctx context.Context) {
+	mu.RLock()
+	registeredPlugins := append([]Plugin(nil), plugins...)
+	mu.RUnlock()
+
+	for _, p := range registeredPlugins {
+		if err := p.Close(ctx); err != nil {
+			slog.Error("Failed to close plugin", "name", p.Name(), "error", err)
+		}
+	}
 }
