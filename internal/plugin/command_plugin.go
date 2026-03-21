@@ -31,16 +31,16 @@ const (
 	commandPluginDefaultOutputMaxBytes = 8 << 20
 	commandPluginMaxOutputMaxBytes     = 64 << 20
 	commandPluginPartReasoning         = "reasoning"
-	commandPluginPartText          = "text"
-	commandPluginPartImageURL      = "image_url"
-	commandPluginPartBinary        = "binary"
-	commandPluginPartToolCall      = "tool_call"
-	commandPluginPartToolResult    = "tool_result"
-	commandPluginPartFinish        = "finish"
-	commandPluginTruncatedSuffix   = "\n... [output truncated]"
-	commandPluginTruncatedJSONStub = `{"error":"plugin output truncated"}`
-	commandPluginModeTransient     = "transient"
-	commandPluginModePersistent    = "persistent"
+	commandPluginPartText              = "text"
+	commandPluginPartImageURL          = "image_url"
+	commandPluginPartBinary            = "binary"
+	commandPluginPartToolCall          = "tool_call"
+	commandPluginPartToolResult        = "tool_result"
+	commandPluginPartFinish            = "finish"
+	commandPluginTruncatedSuffix       = "\n... [output truncated]"
+	commandPluginTruncatedJSONStub     = `{"error":"plugin output truncated"}`
+	commandPluginModeTransient         = "transient"
+	commandPluginModePersistent        = "persistent"
 )
 
 var supportedCommandPluginHooks = []string{
@@ -519,7 +519,7 @@ func (p *commandPlugin) invoke(ctx context.Context, event string, input any, out
 }
 
 // ---------------------------------------------------------------------------
-// persistentPlugin — long-running stdio JSON-lines RPC
+// PersistentPlugin — long-running stdio JSON-lines RPC.
 // ---------------------------------------------------------------------------
 
 type persistentPluginRequest struct {

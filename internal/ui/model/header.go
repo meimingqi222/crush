@@ -127,8 +127,8 @@ func renderHeaderDetails(
 
 	agentCfg := com.Config().Agents[config.AgentCoder]
 	model := com.Config().GetModelByType(agentCfg.Model)
-	// Use LastTotalTokens for consistent context display with opencode.
-	totalTokens := session.LastTotalTokens()
+	// Use LastInputTokens for context usage display (matches sidebar and shouldAutoSummarize).
+	totalTokens := session.LastInputTokens()
 	formattedUsage := t.Header.Percentage.Render(common.FormatContextUsage(totalTokens, model.ContextWindow))
 	parts = append(parts, formattedUsage)
 

@@ -986,6 +986,11 @@ func truncateMessagesToFit(msgs []fantasy.Message, maxTokens int64) []fantasy.Me
 		}
 	}
 
+	// Subtract tokens for messages we already skipped (system messages)
+	for i := 0; i < startIdx; i++ {
+		totalTokens -= msgInfos[i].tokens
+	}
+
 	// Store original token count before removal
 	originalTokens := totalTokens
 
