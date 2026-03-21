@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/tree"
 	"github.com/charmbracelet/crush/internal/agent"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/ui/anim"
 	"github.com/charmbracelet/crush/internal/ui/styles"
@@ -107,34 +108,45 @@ func (r *AgentToolRenderContext) RenderTool(sty *styles.Styles, width int, opts 
 	var params agent.AgentParams
 	_ = json.Unmarshal([]byte(opts.ToolCall.Input), &params)
 
-	prompt := params.Prompt
-	prompt = strings.ReplaceAll(prompt, "\n", " ")
+	prompt := strings.ReplaceAll(params.Prompt, "\n", " ")
+	description := strings.TrimSpace(params.Description)
+	if description == "" {
+		description = prompt
+	}
+	description = strings.ReplaceAll(description, "\n", " ")
+	subagentType := titleCase(config.CanonicalSubagentID(params.SubagentType))
 
 	header := toolHeader(sty, opts.Status, "Agent", cappedWidth, opts.Compact)
 	if opts.Compact {
 		return header
 	}
 
-	// Build the task tag and prompt.
-	taskTag := sty.Tool.AgentTaskTag.Render("Task")
+	// Build the subagent tag and description.
+	taskTag := sty.Tool.AgentTaskTag.Render(subagentType)
 	taskTagWidth := lipgloss.Width(taskTag)
 
-	// Calculate remaining width for prompt.
+	// Calculate remaining width for the title.
 	remainingWidth := min(cappedWidth-taskTagWidth-3, maxTextWidth-taskTagWidth-3) // -3 for spacing
 
-	promptText := sty.Tool.AgentPrompt.Width(remainingWidth).Render(prompt)
-
-	header = lipgloss.JoinVertical(
-		lipgloss.Left,
+	descriptionText := sty.Tool.AgentPrompt.Width(remainingWidth).Render(description)
+	headerParts := []string{
 		header,
 		"",
 		lipgloss.JoinHorizontal(
 			lipgloss.Left,
 			taskTag,
 			" ",
-			promptText,
+			descriptionText,
 		),
-	)
+	}
+	if prompt != "" && prompt != description {
+		promptTag := sty.Tool.AgenticFetchPromptTag.Render("Prompt")
+		promptWidth := min(cappedWidth-lipgloss.Width(promptTag)-3, maxTextWidth-lipgloss.Width(promptTag)-3)
+		promptText := sty.Tool.AgentPrompt.Width(promptWidth).Render(prompt)
+		headerParts = append(headerParts, lipgloss.JoinHorizontal(lipgloss.Left, promptTag, " ", promptText))
+	}
+
+	header = lipgloss.JoinVertical(lipgloss.Left, headerParts...)
 
 	// Build tree with nested tool calls.
 	childTools := tree.Root(header)
@@ -162,6 +174,13 @@ func (r *AgentToolRenderContext) RenderTool(sty *styles.Styles, width int, opts 
 	}
 
 	return result
+}
+
+func titleCase(value string) string {
+	if value == "" {
+		return ""
+	}
+	return strings.ToUpper(value[:1]) + value[1:]
 }
 
 // -----------------------------------------------------------------------------

@@ -475,6 +475,11 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := m.setSessionMessages(msgs); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+		if msg.selectedMessageID != "" && m.chat.SelectMessage(msg.selectedMessageID) {
+			if cmd := m.chat.ScrollToSelectedAndAnimate(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
 		if hasInProgressTodo(m.session.Todos) {
 			// only start spinner if there is an in-progress todo
 			if m.isAgentBusy() {
@@ -1844,6 +1849,34 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				}
 				return true
 			}
+		case key.Matches(msg, m.keyMap.Chat.SessionParent):
+			if m.state == uiChat && m.hasSession() {
+				if cmd := m.openParentSession(); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return true
+			}
+		case key.Matches(msg, m.keyMap.Chat.SessionChild):
+			if m.state == uiChat && m.hasSession() {
+				if cmd := m.openSelectedChildSession(); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return true
+			}
+		case key.Matches(msg, m.keyMap.Chat.SessionNext):
+			if m.state == uiChat && m.hasSession() {
+				if cmd := m.cycleSiblingChildSession(1); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return true
+			}
+		case key.Matches(msg, m.keyMap.Chat.SessionPrev):
+			if m.state == uiChat && m.hasSession() {
+				if cmd := m.cycleSiblingChildSession(-1); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return true
+			}
 		case key.Matches(msg, m.keyMap.Suspend):
 			if m.isAgentBusy() {
 				cmds = append(cmds, util.ReportWarn("Agent is busy, please wait..."))
@@ -2399,6 +2432,8 @@ func (m *UI) ShortHelp() []key.Binding {
 				k.Chat.PageUp,
 				k.Chat.PageDown,
 				k.Chat.Copy,
+				k.Chat.SessionParent,
+				k.Chat.SessionChild,
 			)
 			if m.pillsExpanded && hasIncompleteTodos(m.session.Todos) && m.promptQueue > 0 {
 				binds = append(binds, k.Chat.PillLeft)
@@ -2510,6 +2545,12 @@ func (m *UI) FullHelp() [][]key.Binding {
 				[]key.Binding{
 					k.Chat.Copy,
 					k.Chat.ClearHighlight,
+					k.Chat.SessionParent,
+					k.Chat.SessionChild,
+				},
+				[]key.Binding{
+					k.Chat.SessionPrev,
+					k.Chat.SessionNext,
 				},
 			)
 			if m.pillsExpanded && hasIncompleteTodos(m.session.Todos) && m.promptQueue > 0 {

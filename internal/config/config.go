@@ -60,9 +60,37 @@ const (
 )
 
 const (
-	AgentCoder string = "coder"
-	AgentTask  string = "task"
+	AgentCoder   string = "coder"
+	AgentTask    string = "task"
+	AgentGeneral string = "general"
+	AgentExplore string = "explore"
 )
+
+type AgentMode string
+
+const (
+	AgentModePrimary  AgentMode = "primary"
+	AgentModeSubagent AgentMode = "subagent"
+	AgentModeAll      AgentMode = "all"
+)
+
+func NormalizeAgentMode(mode AgentMode) AgentMode {
+	switch mode {
+	case AgentModePrimary, AgentModeSubagent, AgentModeAll:
+		return mode
+	default:
+		return AgentModeAll
+	}
+}
+
+func CanonicalSubagentID(id string) string {
+	switch id {
+	case "", AgentTask:
+		return AgentExplore
+	default:
+		return id
+	}
+}
 
 type SelectedModel struct {
 	// The model id as used by the provider API.
@@ -375,9 +403,10 @@ func (m MCPConfig) SupportsInteractiveAuth() bool {
 }
 
 type Agent struct {
-	ID          string `json:"id,omitempty"`
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
+	ID          string    `json:"id,omitempty"`
+	Name        string    `json:"name,omitempty"`
+	Description string    `json:"description,omitempty"`
+	Mode        AgentMode `json:"mode,omitempty" jsonschema:"description=Where this agent can run,enum=primary,enum=subagent,enum=all,default=all"`
 	// This is the id of the system prompt used by the agent
 	Disabled bool `json:"disabled,omitempty"`
 
@@ -467,7 +496,7 @@ type Config struct {
 
 	Plugins []PluginConfig `json:"plugins,omitempty" jsonschema:"description=External command plugins for chat or tool lifecycle customization"`
 
-	Agents map[string]Agent `json:"-"`
+	Agents map[string]Agent `json:"agents,omitempty" jsonschema:"description=Named agent configurations, including built-in overrides and custom subagents"`
 }
 
 func (c *Config) EnabledProviders() []ProviderConfig {
@@ -574,6 +603,16 @@ func resolveReadOnlyTools(tools []string) []string {
 	return filterSlice(tools, readOnlyTools, true)
 }
 
+func resolvePrimaryTools(tools []string) []string {
+	blockedTools := []string{"todos"}
+	return filterSlice(tools, blockedTools, false)
+}
+
+func resolveSubAgentTools(tools []string) []string {
+	blockedTools := []string{"agent", "request_user_input", "todos"}
+	return filterSlice(tools, blockedTools, false)
+}
+
 func filterSlice(data []string, mask []string, include bool) []string {
 	var filtered []string
 	for _, s := range data {
@@ -586,30 +625,148 @@ func filterSlice(data []string, mask []string, include bool) []string {
 	return filtered
 }
 
-func (c *Config) SetupAgents() {
-	allowedTools := resolveAllowedTools(allToolNames(), c.Options.DisabledTools)
-
-	agents := map[string]Agent{
+func builtinAgents(primaryTools, generalTools, exploreTools, contextPaths []string) map[string]Agent {
+	return map[string]Agent{
 		AgentCoder: {
 			ID:           AgentCoder,
 			Name:         "Coder",
 			Description:  "An agent that helps with executing coding tasks.",
+			Mode:         AgentModePrimary,
 			Model:        SelectedModelTypeLarge,
-			ContextPaths: c.Options.ContextPaths,
-			AllowedTools: allowedTools,
+			ContextPaths: contextPaths,
+			AllowedTools: primaryTools,
 		},
-
-		AgentTask: {
-			ID:           AgentTask,
-			Name:         "Task",
-			Description:  "An agent that helps with searching for context and finding implementation details.",
+		AgentGeneral: {
+			ID:           AgentGeneral,
+			Name:         "General",
+			Description:  "A subagent that helps with executing independent implementation tasks.",
+			Mode:         AgentModeSubagent,
 			Model:        SelectedModelTypeLarge,
-			ContextPaths: c.Options.ContextPaths,
-			AllowedTools: resolveReadOnlyTools(allowedTools),
+			ContextPaths: contextPaths,
+			AllowedTools: generalTools,
+		},
+		AgentExplore: {
+			ID:           AgentExplore,
+			Name:         "Explore",
+			Description:  "A subagent that helps with searching for context and finding implementation details.",
+			Mode:         AgentModeSubagent,
+			Model:        SelectedModelTypeLarge,
+			ContextPaths: contextPaths,
+			AllowedTools: exploreTools,
 			// NO MCPs or LSPs by default
 			AllowedMCP: map[string][]string{},
 		},
 	}
+}
+
+func mergeAgentConfig(base, override Agent) Agent {
+	merged := base
+
+	if override.Name != "" {
+		merged.Name = override.Name
+	}
+	if override.Description != "" {
+		merged.Description = override.Description
+	}
+	if override.Mode != "" {
+		merged.Mode = override.Mode
+	}
+	if override.Disabled {
+		merged.Disabled = true
+	}
+	if override.Model != "" {
+		merged.Model = override.Model
+	}
+	if override.AllowedTools != nil {
+		merged.AllowedTools = override.AllowedTools
+	}
+	if override.AllowedMCP != nil {
+		merged.AllowedMCP = override.AllowedMCP
+	}
+	if override.ContextPaths != nil {
+		merged.ContextPaths = override.ContextPaths
+	}
+
+	return merged
+}
+
+func agentConfigsEqual(a, b Agent) bool {
+	return a.ID == b.ID &&
+		a.Name == b.Name &&
+		a.Description == b.Description &&
+		a.Mode == b.Mode &&
+		a.Disabled == b.Disabled &&
+		a.Model == b.Model &&
+		slices.Equal(a.AllowedTools, b.AllowedTools) &&
+		slices.Equal(a.ContextPaths, b.ContextPaths) &&
+		maps.EqualFunc(a.AllowedMCP, b.AllowedMCP, slices.Equal)
+}
+
+func defaultAllowedToolsForAgent(agent Agent, primaryTools, generalTools []string) []string {
+	switch NormalizeAgentMode(agent.Mode) {
+	case AgentModeSubagent:
+		return generalTools
+	case AgentModePrimary, AgentModeAll:
+		return primaryTools
+	default:
+		return primaryTools
+	}
+}
+
+func normalizeConfiguredAgent(
+	key string,
+	agent Agent,
+	primaryTools, generalTools, contextPaths []string,
+) (string, Agent, bool) {
+	agentID := strings.TrimSpace(agent.ID)
+	if agentID == "" {
+		agentID = strings.TrimSpace(key)
+	}
+	if agentID == "" {
+		return "", Agent{}, false
+	}
+
+	agentID = CanonicalSubagentID(agentID)
+	agent.ID = agentID
+
+	if agent.Name == "" {
+		agent.Name = strings.ToUpper(agentID[:1]) + agentID[1:]
+	}
+	if agent.Model == "" {
+		agent.Model = SelectedModelTypeLarge
+	}
+	if agent.AllowedTools == nil {
+		agent.AllowedTools = defaultAllowedToolsForAgent(agent, primaryTools, generalTools)
+	}
+	if agent.ContextPaths == nil {
+		agent.ContextPaths = contextPaths
+	}
+
+	return agentID, agent, true
+}
+
+func (c *Config) SetupAgents() {
+	allowedTools := resolveAllowedTools(allToolNames(), c.Options.DisabledTools)
+	primaryTools := resolvePrimaryTools(allowedTools)
+	generalTools := resolveSubAgentTools(primaryTools)
+	exploreTools := resolveReadOnlyTools(allowedTools)
+
+	agents := builtinAgents(primaryTools, generalTools, exploreTools, c.Options.ContextPaths)
+	for key, configured := range c.Agents {
+		agentID, normalized, ok := normalizeConfiguredAgent(key, configured, primaryTools, generalTools, c.Options.ContextPaths)
+		if !ok {
+			continue
+		}
+		if builtin, exists := agents[agentID]; exists {
+			if agentConfigsEqual(normalized, builtin) {
+				continue
+			}
+			agents[agentID] = mergeAgentConfig(builtin, normalized)
+			continue
+		}
+		agents[agentID] = normalized
+	}
+
 	c.Agents = agents
 }
 
