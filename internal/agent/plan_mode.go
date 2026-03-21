@@ -1,23 +1,8 @@
 package agent
 
 import (
-	agenttools "github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/session"
 )
-
-var planModeAllowedTools = []string{
-	agenttools.DiagnosticsToolName,
-	agenttools.FetchToolName,
-	agenttools.GlobToolName,
-	agenttools.GrepToolName,
-	agenttools.LSToolName,
-	agenttools.ListMCPResourcesToolName,
-	agenttools.ReadMCPResourceToolName,
-	agenttools.ReferencesToolName,
-	agenttools.RequestUserInputToolName,
-	agenttools.SourcegraphToolName,
-	agenttools.ViewToolName,
-}
 
 const planModeSystemPrompt = `<collaboration_mode>
 You are in Plan Mode.

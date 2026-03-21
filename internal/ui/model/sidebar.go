@@ -50,11 +50,8 @@ func (m *UI) modelInfo(width int) string {
 
 	var modelContext *common.ModelContextInfo
 	if model != nil && m.session != nil {
-		// Use LastTotalTokens for consistent context display with opencode.
-		// Total includes both input and output tokens, so the progress bar
-		// reflects the actual conversation size growth.
 		modelContext = &common.ModelContextInfo{
-			InputTokens:  m.session.LastTotalTokens(),
+			InputTokens:  m.session.LastInputTokens(),
 			OutputTokens: m.session.LastOutputTokens(),
 			Cost:         m.session.Cost,
 			ModelContext: model.CatwalkCfg.ContextWindow,

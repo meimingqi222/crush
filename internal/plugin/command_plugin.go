@@ -235,7 +235,18 @@ func newConfiguredPlugins(input PluginInput) ([]Plugin, error) {
 	} else {
 		slog.Debug("No local plugins discovered")
 	}
-	plugins = append(plugins, localPlugins...)
+	// Deduplicate: skip local plugins whose name already exists from config.
+	configNames := make(map[string]struct{}, len(plugins))
+	for _, p := range plugins {
+		configNames[p.Name()] = struct{}{}
+	}
+	for _, lp := range localPlugins {
+		if _, exists := configNames[lp.Name()]; exists {
+			slog.Debug("Skipping duplicate local plugin", "name", lp.Name())
+			continue
+		}
+		plugins = append(plugins, lp)
+	}
 
 	return plugins, nil
 }
@@ -533,7 +544,7 @@ type persistentPluginManager struct {
 	cfg     resolvedCommandPluginConfig
 	cmd     *exec.Cmd
 	stdin   io.WriteCloser
-	stderr  *bytes.Buffer
+	stderr  *boundedBuffer
 	pending map[int]*pendingRequest
 	nextID  int
 	mu      sync.Mutex
@@ -652,7 +663,7 @@ func (p *persistentPlugin) sessionCompacting(ctx context.Context, input SessionC
 }
 
 func newPersistentPluginManager(ctx context.Context, cfg resolvedCommandPluginConfig) (*persistentPluginManager, error) {
-	cmd := exec.CommandContext(ctx, cfg.command, cfg.args...)
+	cmd := exec.Command(cfg.command, cfg.args...)
 	cmd.Dir = cfg.cwd
 	cmd.Env = append(os.Environ(), cfg.env...)
 	cmd.Env = append(cmd.Env,
@@ -670,7 +681,8 @@ func newPersistentPluginManager(ctx context.Context, cfg resolvedCommandPluginCo
 		return nil, fmt.Errorf("plugin %q stdout pipe: %w", cfg.name, err)
 	}
 
-	stderrBuf := new(bytes.Buffer)
+	outputMaxBytes := resolveCommandPluginOutputMaxBytes()
+	stderrBuf := newBoundedBuffer(outputMaxBytes)
 	cmd.Stderr = stderrBuf
 
 	if err := cmd.Start(); err != nil {

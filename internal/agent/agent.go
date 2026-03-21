@@ -1578,7 +1578,7 @@ func autoSummarizeSafetyReserveTokens(contextWindow int64) int64 {
 
 func shouldAutoSummarize(contextUsed, contextWindow, maxOutputTokens int64) bool {
 	if contextWindow <= 0 {
-		slog.Warn("shouldAutoSummarize: contextWindow <= 0, returning false", "contextWindow", contextWindow)
+		slog.Warn("ShouldAutoSummarize: contextWindow <= 0, returning false", "contextWindow", contextWindow)
 		return false
 	}
 	reserved := autoSummarizeReservedTokens(maxOutputTokens)
@@ -1588,7 +1588,7 @@ func shouldAutoSummarize(contextUsed, contextWindow, maxOutputTokens int64) bool
 	softLimit := contextWindow * autoSummarizeSoftLimitNumerator / autoSummarizeSoftLimitDenominator
 	usable := min(hardLimit, softLimit)
 
-	slog.Info("shouldAutoSummarize calculation",
+	slog.Info("ShouldAutoSummarize calculation",
 		"contextUsed", contextUsed,
 		"contextWindow", contextWindow,
 		"maxOutputTokens", maxOutputTokens,
