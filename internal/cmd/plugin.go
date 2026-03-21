@@ -133,8 +133,21 @@ func installFromLocalDir(source, pluginsDir string) error {
 		return fmt.Errorf("invalid plugin metadata: %w", err)
 	}
 
+	// Validate plugin name to prevent path traversal
+	if err := validatePluginName(metadata.Name); err != nil {
+		return fmt.Errorf("invalid plugin name: %w", err)
+	}
+
 	// Copy plugin to plugins directory (excluding node_modules)
 	pluginDir := filepath.Join(pluginsDir, metadata.Name)
+
+	// Additional safety check: ensure resolved path stays within plugins directory
+	cleanPluginDir := filepath.Clean(pluginDir) + string(filepath.Separator)
+	cleanPluginsDir := filepath.Clean(pluginsDir) + string(filepath.Separator)
+	if !strings.HasPrefix(cleanPluginDir, cleanPluginsDir) {
+		return fmt.Errorf("plugin name resolves outside plugins directory: %s", metadata.Name)
+	}
+
 	if err := copyPluginDir(source, pluginDir); err != nil {
 		return fmt.Errorf("failed to copy plugin: %w", err)
 	}
@@ -314,6 +327,11 @@ func listPlugins(workingDir string) error {
 }
 
 func uninstallPlugin(name, workingDir string) error {
+	// Validate plugin name to prevent path traversal
+	if err := validatePluginName(name); err != nil {
+		return fmt.Errorf("invalid plugin name: %w", err)
+	}
+
 	pluginsDir := filepath.Join(workingDir, ".crush", "plugins")
 	pluginDir := filepath.Join(pluginsDir, name)
 
@@ -333,6 +351,25 @@ func uninstallPlugin(name, workingDir string) error {
 	}
 
 	fmt.Printf("Plugin %s uninstalled successfully\n", name)
+	return nil
+}
+
+// validatePluginName ensures the plugin name is safe for use in file paths.
+// It rejects empty names, names with path separators, and names that could
+// resolve to the plugins directory itself (like "." or "..").
+func validatePluginName(name string) error {
+	if name == "" {
+		return fmt.Errorf("plugin name cannot be empty")
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("plugin name cannot be '.' or '..'")
+	}
+	if strings.ContainsAny(name, "/\\") {
+		return fmt.Errorf("plugin name cannot contain path separators")
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("plugin name cannot contain '..'")
+	}
 	return nil
 }
 
