@@ -960,7 +960,7 @@ func truncateMessagesToFit(msgs []fantasy.Message, maxTokens int64) []fantasy.Me
 		return msgs
 	}
 
-	// Calculate tokens for all messages
+	// Calculate tokens for all messages.
 	type msgInfo struct {
 		index  int
 		tokens int64
@@ -974,29 +974,26 @@ func truncateMessagesToFit(msgs []fantasy.Message, maxTokens int64) []fantasy.Me
 		totalTokens += tokens
 	}
 
-	// If already under limit, return as-is
+	// If already under limit, return as-is.
 	if totalTokens <= maxTokens {
 		return msgs
 	}
 
-	// Keep removing oldest messages until we're under the limit
-	// Skip system messages (usually at the beginning)
+	// Skip system messages at the beginning (they will be re-added by the caller's PrepareStep).
 	startIdx := 0
-	for i, msg := range msgs {
-		if msg.Role == fantasy.MessageRoleSystem {
-			startIdx = i + 1
-		}
+	for startIdx < len(msgs) && msgs[startIdx].Role == fantasy.MessageRoleSystem {
+		startIdx++
 	}
 
-	// Subtract tokens for messages we already skipped (system messages)
+	// Subtract tokens for messages we already skipped (system messages).
 	for i := 0; i < startIdx; i++ {
 		totalTokens -= msgInfos[i].tokens
 	}
 
-	// Store original token count before removal
+	// Store original token count before removal.
 	originalTokens := totalTokens
 
-	// Remove from the oldest non-system message first
+	// Remove from the oldest non-system message first.
 	for totalTokens > maxTokens && startIdx < len(msgs)-minMessagesToKeep {
 		totalTokens -= msgInfos[startIdx].tokens
 		startIdx++

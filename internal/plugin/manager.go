@@ -34,7 +34,10 @@ func Init(ctx context.Context, input PluginInput) error {
 	mu.Lock()
 	initializedHooks = nil
 	customTools = make(map[string]ToolDefinition)
-	registeredPlugins := append([]Plugin(nil), plugins...)
+
+	// Snapshot plugins that were manually registered (via Register) before we clear.
+	// These need to be re-initialized after Close since they don't have config to recreate them.
+	manuallyRegistered := append([]Plugin(nil), plugins...)
 
 	// Close all existing plugins before clearing to prevent process leaks.
 	for _, p := range plugins {
@@ -55,10 +58,34 @@ func Init(ctx context.Context, input PluginInput) error {
 	for _, p := range configuredPlugins {
 		Register(p)
 	}
-	registeredPlugins = append(registeredPlugins, configuredPlugins...)
 	toolSources := make(map[string]string)
 
-	for _, p := range registeredPlugins {
+	// Initialize manually registered plugins first (they were closed above and need re-init).
+	for _, p := range manuallyRegistered {
+		slog.Info("Initializing plugin", "name", p.Name())
+		h, err := p.Init(ctx, input)
+		if err != nil {
+			slog.Error("Failed to initialize plugin", "name", p.Name(), "error", err)
+			continue
+		}
+
+		mu.Lock()
+		initializedHooks = append(initializedHooks, h)
+		for name, tool := range h.Tools {
+			source := "plugin:" + p.Name()
+			if existingSource, exists := toolSources[name]; exists {
+				slog.Warn("Custom tool registration collision", "tool", name, "existing_source", existingSource, "overriding_source", source)
+			}
+			customTools[name] = tool
+			toolSources[name] = source
+		}
+		mu.Unlock()
+
+		slog.Info("Plugin initialized", "name", p.Name(), "tools", len(h.Tools))
+	}
+
+	// Then initialize newly configured plugins (fresh instances, not previously closed).
+	for _, p := range configuredPlugins {
 		slog.Info("Initializing plugin", "name", p.Name())
 		h, err := p.Init(ctx, input)
 		if err != nil {
