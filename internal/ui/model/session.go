@@ -459,10 +459,11 @@ func (m *UI) openSelectedChildSession() tea.Cmd {
 	}
 
 	childID := m.com.App.Sessions.CreateAgentToolSessionID(toolItem.MessageID(), toolItem.ToolCall().ID)
+	parentSessionID := m.session.ID
 
 	return func() tea.Msg {
 		child, err := m.com.App.Sessions.Get(context.Background(), childID)
-		if err != nil || child.ParentSessionID != m.session.ID {
+		if err != nil || child.ParentSessionID != parentSessionID {
 			return nil
 		}
 		return openChildSessionMsg{sessionID: child.ID}
