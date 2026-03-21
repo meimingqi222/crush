@@ -944,11 +944,15 @@ func (m *UI) setSessionMessages(msgs []message.Message) tea.Cmd {
 	m.loadNestedToolCalls(items)
 
 	// If the user switches between sessions while the agent is working we want
-	// to make sure the animations are shown.
-	for _, item := range items {
-		if animatable, ok := item.(chat.Animatable); ok {
-			if cmd := animatable.StartAnimation(); cmd != nil {
-				cmds = append(cmds, cmd)
+	// to make sure the animations are shown. Only start animations if the
+	// agent is actually busy; otherwise we are restoring a historical session
+	// and nothing should be spinning.
+	if m.isAgentBusy() {
+		for _, item := range items {
+			if animatable, ok := item.(chat.Animatable); ok {
+				if cmd := animatable.StartAnimation(); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
 			}
 		}
 	}
@@ -1164,6 +1168,7 @@ func (m *UI) updateSessionMessage(msg message.Message) tea.Cmd {
 		}
 	}
 
+	isCanceled := msg.FinishReason() == message.FinishReasonCanceled
 	var items []chat.MessageItem
 	for _, tc := range msg.ToolCalls() {
 		existingToolItem := m.chat.MessageItem(tc.ID)
@@ -1174,9 +1179,12 @@ func (m *UI) updateSessionMessage(msg message.Message) tea.Cmd {
 			if (tc.Finished && !existingToolCall.Finished) || tc.Input != existingToolCall.Input {
 				toolItem.SetToolCall(tc)
 			}
+			if isCanceled && toolItem.Status() != chat.ToolStatusCanceled {
+				toolItem.SetStatus(chat.ToolStatusCanceled)
+			}
 		}
 		if existingToolItem == nil {
-			items = append(items, chat.NewToolMessageItem(m.com.Styles, msg.ID, tc, nil, false))
+			items = append(items, chat.NewToolMessageItem(m.com.Styles, msg.ID, tc, nil, isCanceled))
 		}
 	}
 

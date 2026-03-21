@@ -225,7 +225,7 @@ func newConfiguredPlugins(input PluginInput) ([]Plugin, error) {
 	}
 
 	// Discover and load local plugins from .crush/plugins directory
-	slog.Debug("newConfiguredPlugins: discovering local plugins", "workingDir", input.WorkingDir)
+	slog.Debug("NewConfiguredPlugins: discovering local plugins", "workingDir", input.WorkingDir)
 	localPlugins, err := discoverLocalPlugins(input)
 	if err != nil {
 		return nil, err
@@ -700,7 +700,7 @@ func (mgr *persistentPluginManager) readLoop(r io.Reader) {
 		line := scanner.Bytes()
 		var resp persistentPluginResponse
 		if err := json.Unmarshal(line, &resp); err != nil {
-			slog.Warn("persistent plugin returned invalid JSON line", "name", mgr.cfg.name, "error", err)
+			slog.Warn("Persistent plugin returned invalid JSON line", "name", mgr.cfg.name, "error", err)
 			continue
 		}
 		mgr.mu.Lock()
@@ -715,7 +715,7 @@ func (mgr *persistentPluginManager) readLoop(r io.Reader) {
 	}
 	// Process ended — wake up any remaining waiters with an error.
 	if err := scanner.Err(); err != nil {
-		slog.Warn("persistent plugin read loop error", "name", mgr.cfg.name, "error", err)
+		slog.Warn("Persistent plugin read loop error", "name", mgr.cfg.name, "error", err)
 	}
 	mgr.mu.Lock()
 	for id, pending := range mgr.pending {
@@ -798,7 +798,7 @@ func (mgr *persistentPluginManager) invoke(ctx context.Context, event string, in
 func (mgr *persistentPluginManager) shutdown(_ context.Context) error {
 	// Close stdin to signal EOF — the plugin process should exit gracefully.
 	if err := mgr.stdin.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
-		slog.Warn("persistent plugin close stdin failed", "name", mgr.cfg.name, "error", err)
+		slog.Warn("Persistent plugin close stdin failed", "name", mgr.cfg.name, "error", err)
 	}
 	done := make(chan error, 1)
 	go func() { done <- mgr.cmd.Wait() }()
@@ -947,17 +947,17 @@ func fromCommandPluginParts(parts []commandPluginPart) ([]message.ContentPart, e
 	return converted, nil
 }
 
-// discoverLocalPlugins scans the .crush/plugins directory for local plugins
+// discoverLocalPlugins scans the .crush/plugins directory for local plugins.
 func discoverLocalPlugins(input PluginInput) ([]Plugin, error) {
 	if input.WorkingDir == "" {
-		slog.Debug("discoverLocalPlugins: no working directory")
+		slog.Debug("DiscoverLocalPlugins: no working directory")
 		return nil, nil
 	}
 
 	pluginsDir := filepath.Join(input.WorkingDir, ".crush", "plugins")
-	slog.Debug("discoverLocalPlugins: checking plugins directory", "path", pluginsDir)
+	slog.Debug("DiscoverLocalPlugins: checking plugins directory", "path", pluginsDir)
 	if _, err := os.Stat(pluginsDir); os.IsNotExist(err) {
-		slog.Debug("discoverLocalPlugins: plugins directory does not exist")
+		slog.Debug("DiscoverLocalPlugins: plugins directory does not exist")
 		return nil, nil
 	}
 
