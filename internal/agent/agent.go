@@ -1557,8 +1557,9 @@ func promptTokensForUsage(usage fantasy.Usage, providerID string) int64 {
 		return usage.InputTokens + usage.CacheCreationTokens + usage.CacheReadTokens
 	}
 	// For OpenAI, Google, etc., InputTokens already includes cached tokens.
-	// Only add CacheCreationTokens (rare) and ReasoningTokens.
-	return usage.InputTokens + usage.CacheCreationTokens + usage.ReasoningTokens
+	// Only add CacheCreationTokens (rare).
+	// Note: ReasoningTokens are output tokens (part of completion_tokens), not input tokens.
+	return usage.InputTokens + usage.CacheCreationTokens
 }
 
 func totalTokensForUsage(usage fantasy.Usage, providerID string) int64 {

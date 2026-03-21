@@ -696,6 +696,7 @@ func newPersistentPluginManager(ctx context.Context, cfg resolvedCommandPluginCo
 		stdin:   stdin,
 		stderr:  stderrBuf,
 		pending: make(map[int]*pendingRequest),
+		nextID:  1, // Start at 1 to avoid collision with JSON zero-value default for missing ID.
 	}
 
 	mgr.wg.Add(1)
