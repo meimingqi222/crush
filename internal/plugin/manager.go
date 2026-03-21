@@ -32,10 +32,10 @@ func Register(p Plugin) {
 // If a plugin fails to initialize, it is logged and skipped.
 func Init(ctx context.Context, input PluginInput) error {
 	mu.Lock()
-	plugins = nil
 	initializedHooks = nil
 	customTools = make(map[string]ToolDefinition)
 	registeredPlugins := append([]Plugin(nil), plugins...)
+	plugins = nil
 	mu.Unlock()
 
 	configuredPlugins, err := newConfiguredPlugins(input)

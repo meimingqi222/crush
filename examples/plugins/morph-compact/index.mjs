@@ -161,7 +161,7 @@ function formatStats() {
     lines.push("Top Sessions:");
     for (const [sessionId, sessionStats] of sortedSessions) {
       const lastTime = sessionStats.lastCompaction
-        ? new Date(sessionStats.lastCompaction).toLocaleTimeString()
+        ? new Date(sessionStats.lastCompaction).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).replace(/\//g, "-")
         : "never";
       lines.push(`  ${sessionId.slice(0, 12)}... : ${sessionStats.compactions} compactions (last: ${lastTime})`);
     }
@@ -173,7 +173,7 @@ function formatStats() {
     lines.push("Recent Compactions:");
     for (let i = 0; i < stats.recentResults.length; i++) {
       const r = stats.recentResults[i];
-      const time = new Date(r.timestamp).toLocaleTimeString();
+      const time = new Date(r.timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).replace(/\//g, "-");
       lines.push(`\n  [${i + 1}] ${time}`);
       lines.push(`      Session: ${r.sessionId.slice(0, 12)}...`);
       // 兼容旧格式
