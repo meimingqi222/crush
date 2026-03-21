@@ -954,7 +954,7 @@ func truncateMessagesToFit(msgs []fantasy.Message, maxTokens int64) []fantasy.Me
 		return msgs
 	}
 
-	// Always keep at least the last 2 messages (user request + assistant response)
+	// Always keep at least the last 2 messages (user request + assistant response).
 	minMessagesToKeep := 2
 	if len(msgs) <= minMessagesToKeep {
 		return msgs

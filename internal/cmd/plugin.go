@@ -95,18 +95,18 @@ var pluginUninstallCmd = &cobra.Command{
 }
 
 func installPlugin(source, workingDir string) error {
-	// Create plugins directory if it doesn't exist
+	// Create plugins directory if it doesn't exist.
 	pluginsDir := filepath.Join(workingDir, ".crush", "plugins")
 	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create plugins directory: %w", err)
 	}
 
-	// Check if source is a local directory
+	// Check if source is a local directory.
 	if info, err := os.Stat(source); err == nil && info.IsDir() {
 		return installFromLocalDir(source, pluginsDir)
 	}
 
-	// Check if source is a URL
+	// Check if source is a URL.
 	if isURL(source) {
 		return installFromURL(source, pluginsDir)
 	}
@@ -115,7 +115,7 @@ func installPlugin(source, workingDir string) error {
 }
 
 func installFromLocalDir(source, pluginsDir string) error {
-	// Read plugin metadata from source directory
+	// Read plugin metadata from source directory.
 	metadataPath := filepath.Join(source, "plugin.json")
 	if _, err := os.Stat(metadataPath); os.IsNotExist(err) {
 		return fmt.Errorf("plugin metadata not found: %s", metadataPath)
@@ -133,15 +133,15 @@ func installFromLocalDir(source, pluginsDir string) error {
 		return fmt.Errorf("invalid plugin metadata: %w", err)
 	}
 
-	// Validate plugin name to prevent path traversal
+	// Validate plugin name to prevent path traversal.
 	if err := validatePluginName(metadata.Name); err != nil {
 		return fmt.Errorf("invalid plugin name: %w", err)
 	}
 
-	// Copy plugin to plugins directory (excluding node_modules)
+	// Copy plugin to plugins directory (excluding node_modules).
 	pluginDir := filepath.Join(pluginsDir, metadata.Name)
 
-	// Additional safety check: ensure resolved path stays within plugins directory
+	// Additional safety check: ensure resolved path stays within plugins directory.
 	cleanPluginDir := filepath.Clean(pluginDir) + string(filepath.Separator)
 	cleanPluginsDir := filepath.Clean(pluginsDir) + string(filepath.Separator)
 	if !strings.HasPrefix(cleanPluginDir, cleanPluginsDir) {
@@ -152,7 +152,7 @@ func installFromLocalDir(source, pluginsDir string) error {
 		return fmt.Errorf("failed to copy plugin: %w", err)
 	}
 
-	// Install dependencies if package.json exists
+	// Install dependencies if package.json exists.
 	packageJSONPath := filepath.Join(pluginDir, "package.json")
 	if _, err := os.Stat(packageJSONPath); err == nil {
 		if err := installNPMDependencies(pluginDir); err != nil {
@@ -167,32 +167,32 @@ func installFromLocalDir(source, pluginsDir string) error {
 func installFromURL(pluginURL, pluginsDir string) error {
 	fmt.Printf("Downloading plugin from %s...\n", pluginURL)
 
-	// Create a temporary directory for download
+	// Create a temporary directory for download.
 	tempDir, err := os.MkdirTemp("", "crush-plugin-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
 	defer os.RemoveAll(tempDir)
 
-	// Download the archive
+	// Download the archive.
 	archivePath := filepath.Join(tempDir, "plugin.zip")
 	if err := downloadFile(pluginURL, archivePath); err != nil {
 		return fmt.Errorf("failed to download plugin: %w", err)
 	}
 
-	// Extract the archive
+	// Extract the archive.
 	extractDir := filepath.Join(tempDir, "extracted")
 	if err := extractZip(archivePath, extractDir); err != nil {
 		return fmt.Errorf("failed to extract plugin: %w", err)
 	}
 
-	// Find the plugin directory (might be in a subdirectory like repo-main/)
+	// Find the plugin directory (might be in a subdirectory like repo-main/).
 	pluginSourceDir, err := findPluginDir(extractDir)
 	if err != nil {
 		return err
 	}
 
-	// Install from the extracted directory
+	// Install from the extracted directory.
 	return installFromLocalDir(pluginSourceDir, pluginsDir)
 }
 
@@ -265,7 +265,9 @@ func extractZip(src, dest string) error {
 			return err
 		}
 
-		_, err = io.Copy(outFile, rc)
+		// Limit decompression size to prevent zip bomb attacks (100 MB per file).
+		const maxFileSize = 100 << 20 // 100 MB
+		_, err = io.Copy(outFile, io.LimitReader(rc, maxFileSize))
 		rc.Close()
 		outFile.Close()
 		if err != nil {
@@ -277,12 +279,12 @@ func extractZip(src, dest string) error {
 }
 
 func findPluginDir(dir string) (string, error) {
-	// Check if plugin.json exists in the root
+	// Check if plugin.json exists in the root.
 	if _, err := os.Stat(filepath.Join(dir, "plugin.json")); err == nil {
 		return dir, nil
 	}
 
-	// Look for plugin.json in subdirectories (common for GitHub archives)
+	// Look for plugin.json in subdirectories (common for GitHub archives).
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return "", err
@@ -343,7 +345,7 @@ func listPlugins(workingDir string) error {
 }
 
 func uninstallPlugin(name, workingDir string) error {
-	// Validate plugin name to prevent path traversal
+	// Validate plugin name to prevent path traversal.
 	if err := validatePluginName(name); err != nil {
 		return fmt.Errorf("invalid plugin name: %w", err)
 	}
@@ -390,13 +392,13 @@ func validatePluginName(name string) error {
 }
 
 func installNPMDependencies(dir string) error {
-	// Check if node_modules already exists
+	// Check if node_modules already exists.
 	if _, err := os.Stat(filepath.Join(dir, "node_modules")); err == nil {
-		// node_modules already exists
+		// node_modules already exists.
 		return nil
 	}
 
-	// Prefer pnpm to avoid duplicate node_modules and save disk space
+	// Prefer pnpm to avoid duplicate node_modules and save disk space.
 	if _, err := exec.LookPath("pnpm"); err == nil {
 		fmt.Printf("Installing dependencies with pnpm in %s...\n", dir)
 		cmd := exec.Command("pnpm", "install")
@@ -409,7 +411,7 @@ func installNPMDependencies(dir string) error {
 		return nil
 	}
 
-	// Fallback to npm if pnpm is not available
+	// Fallback to npm if pnpm is not available.
 	if _, err := exec.LookPath("npm"); err == nil {
 		fmt.Printf("pnpm not found, falling back to npm in %s...\n", dir)
 		fmt.Println("Tip: Install pnpm for better disk usage: npm install -g pnpm")
@@ -444,7 +446,7 @@ func copyPluginDir(src, dst string) error {
 	}
 
 	for _, entry := range entries {
-		// Skip node_modules directory
+		// Skip node_modules directory.
 		if entry.IsDir() && entry.Name() == "node_modules" {
 			continue
 		}
