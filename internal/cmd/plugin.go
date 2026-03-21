@@ -236,6 +236,13 @@ func extractZip(src, dest string) error {
 	for _, f := range r.File {
 		fpath := filepath.Join(dest, f.Name)
 
+		// Check for Zip Slip vulnerability: ensure the resolved path is within dest.
+		cleanFpath := filepath.Clean(fpath)
+		cleanDest := filepath.Clean(dest)
+		if !strings.HasPrefix(cleanFpath, cleanDest+string(filepath.Separator)) {
+			return fmt.Errorf("invalid file path in archive: %s (potential path traversal)", f.Name)
+		}
+
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(fpath, f.Mode()); err != nil {
 				return err
