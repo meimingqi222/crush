@@ -947,6 +947,8 @@ func isContextLengthError(err error) bool {
 // truncateMessagesToFit truncates messages to fit within the specified token limit.
 // It keeps the most recent messages and removes older ones until the estimated
 // token count is below the limit.
+// Note: System messages are excluded from the result. The caller is responsible
+// for adding appropriate system messages (e.g., via PrepareStep).
 func truncateMessagesToFit(msgs []fantasy.Message, maxTokens int64) []fantasy.Message {
 	if len(msgs) == 0 {
 		return msgs
@@ -1177,6 +1179,9 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 			// User cancelled or context too long - remove the summary message.
 			deleteErr := a.messages.Delete(ctx, summaryMessage.ID)
 			if isContextLengthErr {
+				if deleteErr != nil {
+					slog.Warn("Failed to delete summary message after context length error", "error", deleteErr, "session_id", sessionID, "message_id", summaryMessage.ID)
+				}
 				return fmt.Errorf("context too long for summarization: %w", err)
 			}
 			return deleteErr
@@ -1606,7 +1611,7 @@ func shouldAutoSummarize(contextUsed, contextWindow, maxOutputTokens int64) bool
 		"shouldSummarize", contextUsed >= usable)
 
 	if usable <= 0 {
-		slog.Warn("shouldAutoSummarize: usable <= 0, forcing summarize", "usable", usable)
+		slog.Warn("ShouldAutoSummarize: usable <= 0, forcing summarize", "usable", usable)
 		return true
 	}
 	return contextUsed >= usable

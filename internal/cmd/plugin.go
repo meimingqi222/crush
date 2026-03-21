@@ -1,14 +1,16 @@
 package cmd
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -27,18 +29,17 @@ var pluginCmd = &cobra.Command{
 }
 
 var pluginInstallCmd = &cobra.Command{
-	Use:   "install [plugin-name|path]",
+	Use:   "install <path|url>",
 	Short: "Install a plugin",
-	Long: `Install a plugin from a local directory or remote registry.
+	Long: `Install a plugin from a local directory or remote URL.
 
 Plugins are installed to .crush/plugins/ directory in your project.
 Dependency installation uses pnpm by default to save disk space.
 If pnpm is not available, falls back to npm.
 
 Examples:
-  crush plugin install morph-compact          # Install from registry
   crush plugin install ./my-plugin            # Install from local directory
-  crush plugin install https://example.com/plugin.zip  # Install from URL
+  crush plugin install https://github.com/user/plugin/archive/refs/heads/main.zip  # Install from URL
 
 Tip: Install pnpm for better disk usage: npm install -g pnpm`,
 	Args: cobra.ExactArgs(1),
@@ -110,8 +111,7 @@ func installPlugin(source, workingDir string) error {
 		return installFromURL(source, pluginsDir)
 	}
 
-	// Assume it's a plugin name from registry
-	return installFromRegistry(source, pluginsDir)
+	return fmt.Errorf("source must be a local directory path or a URL (got: %s)", source)
 }
 
 func installFromLocalDir(source, pluginsDir string) error {
@@ -164,124 +164,133 @@ func installFromLocalDir(source, pluginsDir string) error {
 	return nil
 }
 
-func installFromURL(url, pluginsDir string) error {
-	// TODO: Implement URL download and installation
-	_ = url
-	_ = pluginsDir
-	return fmt.Errorf("URL installation not yet implemented")
-}
+func installFromURL(pluginURL, pluginsDir string) error {
+	fmt.Printf("Downloading plugin from %s...\n", pluginURL)
 
-func installFromRegistry(name, pluginsDir string) error {
-	// TODO: Implement registry installation
-	// For now, support built-in plugins
-	switch name {
-	case "morph-compact":
-		return installMorphCompact(pluginsDir)
-	default:
-		return fmt.Errorf("unknown plugin: %s", name)
-	}
-}
-
-func installMorphCompact(pluginsDir string) error {
-	// Create morph-compact plugin directory
-	pluginDir := filepath.Join(pluginsDir, "morph-compact")
-	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create plugin directory: %w", err)
-	}
-
-	// Create package.json
-	packageJSON := `{
-  "name": "crush-morph-compact-plugin",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "@morphllm/morphsdk": "latest"
-  }
-}`
-	if err := os.WriteFile(filepath.Join(pluginDir, "package.json"), []byte(packageJSON), 0o644); err != nil {
-		return fmt.Errorf("failed to create package.json: %w", err)
-	}
-
-	// Create plugin.json with persistent mode for long-running process
-	pluginJSON := `{
-  "name": "morph-compact",
-  "version": "1.0.0",
-  "description": "Morph compact plugin for Crush",
-  "command": "node",
-  "args": ["index.mjs"],
-  "mode": "persistent",
-  "hooks": ["chat_messages_transform", "session_compacting"],
-  "timeout_ms": 60000,
-  "env": {
-    "MORPH_API_KEY": "$MORPH_API_KEY",
-    "MORPH_COMPACT_CONTEXT_THRESHOLD": "0.7",
-    "MORPH_COMPACT_PRESERVE_RECENT": "2",
-    "MORPH_COMPACT_RATIO": "0.3",
-    "MORPH_MODEL_CONTEXT_TOKENS": "200000"
-  }
-}`
-	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(pluginJSON), 0o644); err != nil {
-		return fmt.Errorf("failed to create plugin.json: %w", err)
-	}
-
-	// Find the index.mjs file - try multiple locations
-	sourcePath := findMorphCompactSource()
-	if sourcePath == "" {
-		return fmt.Errorf("could not find morph-compact plugin source (index.mjs)")
-	}
-
-	destPath := filepath.Join(pluginDir, "index.mjs")
-
-	// Read source file
-	data, err := os.ReadFile(sourcePath)
+	// Create a temporary directory for download
+	tempDir, err := os.MkdirTemp("", "crush-plugin-*")
 	if err != nil {
-		return fmt.Errorf("failed to read source plugin: %w", err)
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Download the archive
+	archivePath := filepath.Join(tempDir, "plugin.zip")
+	if err := downloadFile(pluginURL, archivePath); err != nil {
+		return fmt.Errorf("failed to download plugin: %w", err)
 	}
 
-	// Write to destination
-	if err := os.WriteFile(destPath, data, 0o644); err != nil {
-		return fmt.Errorf("failed to write plugin file: %w", err)
+	// Extract the archive
+	extractDir := filepath.Join(tempDir, "extracted")
+	if err := extractZip(archivePath, extractDir); err != nil {
+		return fmt.Errorf("failed to extract plugin: %w", err)
 	}
 
-	// Install dependencies
-	if err := installNPMDependencies(pluginDir); err != nil {
-		return fmt.Errorf("failed to install dependencies: %w", err)
+	// Find the plugin directory (might be in a subdirectory like repo-main/)
+	pluginSourceDir, err := findPluginDir(extractDir)
+	if err != nil {
+		return err
 	}
 
-	fmt.Println("Morph compact plugin installed successfully")
-	fmt.Println("Don't forget to set MORPH_API_KEY environment variable")
+	// Install from the extracted directory
+	return installFromLocalDir(pluginSourceDir, pluginsDir)
+}
+
+func downloadFile(url, dest string) error {
+	resp, err := httpGet(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed with status: %s", resp.Status)
+	}
+
+	out, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, resp.Body)
+	return err
+}
+
+func httpGet(url string) (*http.Response, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	return client.Get(url)
+}
+
+func extractZip(src, dest string) error {
+	r, err := zip.OpenReader(src)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return err
+	}
+
+	for _, f := range r.File {
+		fpath := filepath.Join(dest, f.Name)
+
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(fpath, f.Mode()); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(fpath), 0o755); err != nil {
+			return err
+		}
+
+		outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+		if err != nil {
+			return err
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			outFile.Close()
+			return err
+		}
+
+		_, err = io.Copy(outFile, rc)
+		rc.Close()
+		outFile.Close()
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
-// findMorphCompactSource locates the morph-compact index.mjs file.
-// It checks multiple possible locations to handle different installation scenarios.
-func findMorphCompactSource() string {
-	// Try executable directory first (for installed binaries)
-	if exePath, err := os.Executable(); err == nil {
-		candidate := filepath.Join(filepath.Dir(exePath), "..", "examples", "plugins", "morph-compact", "index.mjs")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+func findPluginDir(dir string) (string, error) {
+	// Check if plugin.json exists in the root
+	if _, err := os.Stat(filepath.Join(dir, "plugin.json")); err == nil {
+		return dir, nil
+	}
+
+	// Look for plugin.json in subdirectories (common for GitHub archives)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			subdir := filepath.Join(dir, entry.Name())
+			if _, err := os.Stat(filepath.Join(subdir, "plugin.json")); err == nil {
+				return subdir, nil
+			}
 		}
 	}
 
-	// Try current working directory (for development)
-	if cwd, err := os.Getwd(); err == nil {
-		candidate := filepath.Join(cwd, "examples", "plugins", "morph-compact", "index.mjs")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-
-	// Try relative to the source file location (for tests)
-	_, filename, _, _ := runtime.Caller(0)
-	if filename != "" {
-		candidate := filepath.Join(filepath.Dir(filename), "..", "..", "..", "examples", "plugins", "morph-compact", "index.mjs")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-
-	return ""
+	return "", fmt.Errorf("plugin.json not found in archive")
 }
 
 func listPlugins(workingDir string) error {
@@ -441,44 +450,6 @@ func copyPluginDir(src, dst string) error {
 				return err
 			}
 		} else {
-			if err := copyFile(srcPath, dstPath); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
-func copyDir(src, dst string) error {
-	// Get source directory info
-	srcInfo, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-
-	// Create destination directory
-	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
-		return err
-	}
-
-	// Read source directory entries
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-
-		if entry.IsDir() {
-			// Recursively copy subdirectory
-			if err := copyDir(srcPath, dstPath); err != nil {
-				return err
-			}
-		} else {
-			// Copy file
 			if err := copyFile(srcPath, dstPath); err != nil {
 				return err
 			}

@@ -3599,6 +3599,14 @@ func (m *UI) handlePasteMsg(msg tea.PasteMsg) tea.Cmd {
 		return nil
 	}
 
+	// If the terminal already provided text content, handle it directly.
+	// This avoids slow PowerShell calls on Windows when pasting plain text.
+	// When clipboard contains an image, terminals typically send empty Content,
+	// so we only check for image/file when Content is empty.
+	if msg.Content != "" {
+		return m.handleClipboardFallback(clipboardFallbackMsg{pasteMsg: msg})
+	}
+
 	// Try to paste image/file from clipboard first.
 	// If clipboard has no image/file content, it will fall back to text paste.
 	return m.pasteImageFromClipboard(msg)

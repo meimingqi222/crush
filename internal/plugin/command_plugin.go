@@ -541,14 +541,15 @@ type pendingRequest struct {
 }
 
 type persistentPluginManager struct {
-	cfg     resolvedCommandPluginConfig
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stderr  *boundedBuffer
-	pending map[int]*pendingRequest
-	nextID  int
-	mu      sync.Mutex
-	wg      sync.WaitGroup
+	cfg      resolvedCommandPluginConfig
+	cmd      *exec.Cmd
+	stdin    io.WriteCloser
+	stderr   *boundedBuffer
+	pending  map[int]*pendingRequest
+	nextID   int
+	mu       sync.Mutex
+	writeMu  sync.Mutex
+	wg       sync.WaitGroup
 }
 
 type persistentPlugin struct {
@@ -780,11 +781,16 @@ func (mgr *persistentPluginManager) invoke(ctx context.Context, event string, in
 		defer cancel()
 	}
 
-	if _, err := mgr.stdin.Write(reqJSON); err != nil {
+	// Use a separate lock for writing to prevent concurrent writes from interleaving.
+	mgr.writeMu.Lock()
+	_, writeErr := mgr.stdin.Write(reqJSON)
+	mgr.writeMu.Unlock()
+
+	if writeErr != nil {
 		mgr.mu.Lock()
 		delete(mgr.pending, id)
 		mgr.mu.Unlock()
-		return fmt.Errorf("plugin %q write: %w", mgr.cfg.name, err)
+		return fmt.Errorf("plugin %q write: %w", mgr.cfg.name, writeErr)
 	}
 
 	select {

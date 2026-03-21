@@ -35,6 +35,13 @@ func Init(ctx context.Context, input PluginInput) error {
 	initializedHooks = nil
 	customTools = make(map[string]ToolDefinition)
 	registeredPlugins := append([]Plugin(nil), plugins...)
+
+	// Close all existing plugins before clearing to prevent process leaks.
+	for _, p := range plugins {
+		if err := p.Close(ctx); err != nil {
+			slog.Debug("Failed to close plugin during init", "name", p.Name(), "error", err)
+		}
+	}
 	plugins = nil
 	mu.Unlock()
 
