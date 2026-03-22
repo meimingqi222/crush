@@ -428,8 +428,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 					prepared.Messages[i].ProviderOptions = nil
 				}
 
-				queuedCalls, _ := a.messageQueue.Get(call.SessionID)
-				a.messageQueue.Del(call.SessionID)
+				queuedCalls, _ := a.messageQueue.Take(call.SessionID)
 				for _, queued := range queuedCalls {
 					userMessage, createErr := a.createUserMessage(callContext, queued)
 					if createErr != nil {
