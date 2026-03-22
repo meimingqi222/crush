@@ -149,7 +149,8 @@ type UI struct {
 	session      *session.Session
 	sessionFiles []SessionFile
 
-	// childSessionInfoCache caches child session metadata to avoid DB I/O in render path
+	// childSessionInfoCache caches child session metadata to avoid
+	// DB I/O in the render path.
 	childSessionInfoCache map[string]childSessionInfo
 
 	// keeps track of read files while we don't have a session id

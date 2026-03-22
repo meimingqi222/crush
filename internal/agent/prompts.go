@@ -72,6 +72,9 @@ func promptForAgent(agentCfg config.Agent, isSubAgent bool, opts ...prompt.Optio
 }
 
 func isReadOnlyAgent(agentCfg config.Agent) bool {
+	if len(agentCfg.AllowedTools) == 0 {
+		return false
+	}
 	readOnlyTools := map[string]struct{}{
 		"glob":        {},
 		"grep":        {},
