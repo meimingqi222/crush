@@ -1124,7 +1124,7 @@ func (c *coordinator) RefreshTools(ctx context.Context) error {
 		return err
 	}
 	c.currentAgent.SetTools(tools)
-	slog.Debug("refreshed agent tools", "count", len(tools))
+	slog.Debug("Refreshed agent tools", "count", len(tools))
 	return nil
 }
 

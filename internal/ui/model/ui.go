@@ -4276,7 +4276,7 @@ func (m *UI) enableDockerMCP() tea.Msg {
 
 	// Refresh agent tools to include the new Docker MCP tools.
 	if err := m.com.App.AgentCoordinator.RefreshTools(ctx); err != nil {
-		slog.Warn("failed to refresh agent tools after enabling Docker MCP", "error", err)
+		slog.Warn("Failed to refresh agent tools after enabling Docker MCP", "error", err)
 	}
 
 	return util.NewInfoMsg("Docker MCP enabled and started successfully")
@@ -4296,7 +4296,7 @@ func (m *UI) disableDockerMCP() tea.Msg {
 
 	// Refresh agent tools to remove the Docker MCP tools.
 	if err := m.com.App.AgentCoordinator.RefreshTools(context.Background()); err != nil {
-		slog.Warn("failed to refresh agent tools after disabling Docker MCP", "error", err)
+		slog.Warn("Failed to refresh agent tools after disabling Docker MCP", "error", err)
 	}
 
 	return util.NewInfoMsg("Docker MCP disabled successfully")

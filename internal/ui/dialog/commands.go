@@ -37,11 +37,11 @@ const (
 	MCPPrompts
 )
 
-// Commands represents a dialog that shows available commands.
 type dockerMCPAvailabilityCheckedMsg struct {
 	available bool
 }
 
+// Commands represents a dialog that shows available commands.
 type Commands struct {
 	com    *common.Common
 	keyMap struct {

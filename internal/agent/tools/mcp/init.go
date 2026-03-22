@@ -226,7 +226,7 @@ func InitializeSingle(ctx context.Context, name string, cfg *config.ConfigStore)
 
 	if m.Disabled {
 		updateState(name, StateDisabled, nil, nil, Counts{})
-		slog.Debug("skipping disabled mcp", "name", name)
+		slog.Debug("Skipping disabled MCP", "name", name)
 		return nil
 	}
 
@@ -290,7 +290,7 @@ func DisableSingle(cfg *config.ConfigStore, name string) error {
 			!errors.Is(err, io.EOF) &&
 			!errors.Is(err, context.Canceled) &&
 			err.Error() != "signal: killed" {
-			slog.Warn("error closing mcp session", "name", name, "error", err)
+			slog.Warn("Error closing MCP session", "name", name, "error", err)
 		}
 		sessions.Del(name)
 	}
