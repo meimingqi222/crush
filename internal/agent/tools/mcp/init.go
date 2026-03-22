@@ -247,7 +247,7 @@ func initClient(ctx context.Context, cfg *config.ConfigStore, name string, m con
 	tools, err := getTools(ctx, session)
 	if err != nil {
 		slog.Error("Error listing tools", "error", err)
-		updateState(name, StateError, err, nil, Counts{})
+		updateState(name, stateForError(err), err, nil, Counts{})
 		session.Close()
 		return err
 	}
