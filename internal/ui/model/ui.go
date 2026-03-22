@@ -4274,6 +4274,11 @@ func (m *UI) enableDockerMCP() tea.Msg {
 		return util.ReportError(fmt.Errorf("docker MCP started but failed to persist configuration: %w", errors.Join(err, disableErr)))()
 	}
 
+	// Refresh agent tools to include the new Docker MCP tools.
+	if err := m.com.App.AgentCoordinator.RefreshTools(ctx); err != nil {
+		slog.Warn("failed to refresh agent tools after enabling Docker MCP", "error", err)
+	}
+
 	return util.NewInfoMsg("Docker MCP enabled and started successfully")
 }
 
@@ -4287,6 +4292,11 @@ func (m *UI) disableDockerMCP() tea.Msg {
 	// Remove from config and persist.
 	if err := store.DisableDockerMCP(); err != nil {
 		return util.ReportError(err)()
+	}
+
+	// Refresh agent tools to remove the Docker MCP tools.
+	if err := m.com.App.AgentCoordinator.RefreshTools(context.Background()); err != nil {
+		slog.Warn("failed to refresh agent tools after disabling Docker MCP", "error", err)
 	}
 
 	return util.NewInfoMsg("Docker MCP disabled successfully")
