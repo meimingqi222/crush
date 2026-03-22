@@ -502,7 +502,7 @@ func (c *Commands) defaultCommands() []*CommandItem {
 		commands = append(commands, NewCommandItem(c.com.Styles, "enable_docker_mcp", "Enable Docker MCP Catalog", "", ActionEnableDockerMCP{}))
 	}
 
-	// Add disable Docker MCP command if it's currently enabled
+	// Add disable Docker MCP command if it's currently enabled.
 	if cfg.IsDockerMCPEnabled() {
 		commands = append(commands, NewCommandItem(c.com.Styles, "disable_docker_mcp", "Disable Docker MCP Catalog", "", ActionDisableDockerMCP{}))
 	}
