@@ -571,6 +571,40 @@ func TestConfig_setupAgentsMergesConfiguredAgentsAndTaskAlias(t *testing.T) {
 	assert.Equal(t, cfg.Options.ContextPaths, reviewerAgent.ContextPaths)
 }
 
+func TestConfig_setupAgentsDoesNotEscalateBuiltinAgentTools(t *testing.T) {
+	cfg := &Config{
+		Options: &Options{
+			DisabledTools: []string{},
+		},
+		Agents: map[string]Agent{
+			// Override only description of explore agent - should NOT escalate tools
+			AgentExplore: {
+				Description: "My custom explore",
+			},
+			// Override only description of general agent - should NOT escalate tools
+			AgentGeneral: {
+				Description: "My custom general",
+			},
+		},
+	}
+
+	cfg.SetupAgents()
+
+	// Explore agent should keep read-only tools, not get primary tools
+	exploreAgent, ok := cfg.Agents[AgentExplore]
+	require.True(t, ok)
+	assert.Equal(t, "My custom explore", exploreAgent.Description)
+	exploreTools := resolveReadOnlyTools(allToolNames())
+	assert.Equal(t, exploreTools, exploreAgent.AllowedTools, "explore agent should keep read-only tools, not get escalated to primary tools")
+
+	// General agent should keep general tools, not get primary tools
+	generalAgent, ok := cfg.Agents[AgentGeneral]
+	require.True(t, ok)
+	assert.Equal(t, "My custom general", generalAgent.Description)
+	generalTools := resolveSubAgentTools(resolvePrimaryTools(allToolNames()))
+	assert.Equal(t, generalTools, generalAgent.AllowedTools, "general agent should keep subagent tools, not get escalated to primary tools")
+}
+
 func TestConfig_configureProvidersWithDisabledProvider(t *testing.T) {
 	knownProviders := []catwalk.Provider{
 		{

@@ -714,11 +714,7 @@ func defaultAllowedToolsForAgent(agent Agent, primaryTools, generalTools []strin
 	}
 }
 
-func normalizeConfiguredAgent(
-	key string,
-	agent Agent,
-	primaryTools, generalTools, contextPaths []string,
-) (string, Agent, bool) {
+func normalizeConfiguredAgent(key string, agent Agent) (string, Agent, bool) {
 	agentID := strings.TrimSpace(agent.ID)
 	if agentID == "" {
 		agentID = strings.TrimSpace(key)
@@ -735,15 +731,6 @@ func normalizeConfiguredAgent(
 		runes[0] = unicode.ToUpper(runes[0])
 		agent.Name = string(runes)
 	}
-	if agent.Model == "" {
-		agent.Model = SelectedModelTypeLarge
-	}
-	if agent.AllowedTools == nil {
-		agent.AllowedTools = defaultAllowedToolsForAgent(agent, primaryTools, generalTools)
-	}
-	if agent.ContextPaths == nil {
-		agent.ContextPaths = contextPaths
-	}
 
 	return agentID, agent, true
 }
@@ -756,7 +743,7 @@ func (c *Config) SetupAgents() {
 
 	agents := builtinAgents(primaryTools, generalTools, exploreTools, c.Options.ContextPaths)
 	for key, configured := range c.Agents {
-		agentID, normalized, ok := normalizeConfiguredAgent(key, configured, primaryTools, generalTools, c.Options.ContextPaths)
+		agentID, normalized, ok := normalizeConfiguredAgent(key, configured)
 		if !ok {
 			continue
 		}
@@ -766,6 +753,16 @@ func (c *Config) SetupAgents() {
 			}
 			agents[agentID] = mergeAgentConfig(builtin, normalized)
 			continue
+		}
+		// Only assign defaults for new (non-builtin) agents.
+		if normalized.Model == "" {
+			normalized.Model = SelectedModelTypeLarge
+		}
+		if normalized.AllowedTools == nil {
+			normalized.AllowedTools = defaultAllowedToolsForAgent(normalized, primaryTools, generalTools)
+		}
+		if normalized.ContextPaths == nil {
+			normalized.ContextPaths = c.Options.ContextPaths
 		}
 		agents[agentID] = normalized
 	}
