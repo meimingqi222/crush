@@ -591,6 +591,7 @@ func allToolNames() []string {
 		"grep",
 		"ls",
 		"request_user_input",
+		"plan_exit",
 		"sourcegraph",
 		"todos",
 		"view",
